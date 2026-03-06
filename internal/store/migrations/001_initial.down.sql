@@ -1,0 +1,7 @@
+DROP TABLE IF EXISTS spans;
+DROP TABLE IF EXISTS transactions;
+DROP TABLE IF EXISTS events;
+DROP TABLE IF EXISTS issues;
+DROP TABLE IF EXISTS project_keys;
+DROP TABLE IF EXISTS projects;
+DROP TABLE IF EXISTS organizations;

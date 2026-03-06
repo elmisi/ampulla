@@ -1,0 +1,46 @@
+services:
+  ampulla:
+    build: .
+    container_name: ampulla
+    restart: always
+    depends_on:
+      ampulla-db:
+        condition: service_healthy
+    env_file: .env
+    labels:
+      - "traefik.enable=true"
+      - "traefik.http.routers.ampulla.rule=Host(`ampulla.elmisi.com`)"
+      - "traefik.http.routers.ampulla.entrypoints=websecure"
+      - "traefik.http.routers.ampulla.tls.certresolver=letsencrypt"
+      - "traefik.http.routers.ampulla.middlewares=security-headers@file,gzip@file"
+      - "traefik.http.services.ampulla.loadbalancer.server.port=8090"
+    networks:
+      - web_proxy_net
+      - ampulla_internal
+
+  ampulla-db:
+    image: postgres:16-alpine
+    container_name: ampulla-db
+    restart: always
+    volumes:
+      - ampulla_pgdata:/var/lib/postgresql/data
+    environment:
+      POSTGRES_DB: ${POSTGRES_DB}
+      POSTGRES_USER: ${POSTGRES_USER}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD}
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U ${POSTGRES_USER} -d ${POSTGRES_DB}"]
+      interval: 5s
+      timeout: 5s
+      retries: 5
+    networks:
+      - ampulla_internal
+
+volumes:
+  ampulla_pgdata:
+
+networks:
+  web_proxy_net:
+    external: true
+  ampulla_internal:
+    driver: bridge
