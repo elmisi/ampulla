@@ -37,7 +37,7 @@ func main() {
 		slog.Error("failed to connect to database", "error", err)
 		os.Exit(1)
 	}
-	defer db.Close()
+	defer db.Close() // closed after processor.Close() due to defer ordering
 
 	if err := db.RunMigrations(cfg.DatabaseURL); err != nil {
 		slog.Error("failed to run migrations", "error", err)
@@ -48,6 +48,7 @@ func main() {
 	authMiddleware := auth.NewMiddleware(db)
 	ingestHandler := ingest.NewHandler(processor)
 	webHandler := web.NewHandler(db)
+	defer processor.Close()
 
 	r := chi.NewRouter()
 	r.Use(middleware.Recoverer)
@@ -65,19 +66,20 @@ func main() {
 		r.Post("/store/", ingestHandler.Store)
 	})
 
-	// Web API (read-only, no auth for MVP)
-	r.Route("/api/0", func(r chi.Router) {
-		r.Get("/organizations/", webHandler.ListOrganizations)
-		r.Get("/organizations/{orgSlug}/projects/", webHandler.ListProjects)
-		r.Get("/projects/{orgSlug}/{projectSlug}/issues/", webHandler.ListIssues)
-		r.Get("/issues/{issueID}/events/", webHandler.ListEvents)
-		r.Get("/organizations/{orgSlug}/events/", webHandler.ListTransactions)
-	})
-
-	// Admin UI + API
+	// Admin UI + API + Web API (all require admin to be enabled)
 	if cfg.AdminEnabled() {
 		adminAuth := admin.NewAuth(cfg.AdminUser, cfg.AdminPassword, cfg.SessionSecret)
 		adminHandler := adminapi.NewHandler(db, cfg.Domain)
+
+		// Web API (read-only, session-authenticated)
+		r.Route("/api/0", func(r chi.Router) {
+			r.Use(adminAuth.SessionMiddleware)
+			r.Get("/organizations/", webHandler.ListOrganizations)
+			r.Get("/organizations/{orgSlug}/projects/", webHandler.ListProjects)
+			r.Get("/projects/{orgSlug}/{projectSlug}/issues/", webHandler.ListIssues)
+			r.Get("/issues/{issueID}/events/", webHandler.ListEvents)
+			r.Get("/organizations/{orgSlug}/events/", webHandler.ListTransactions)
+		})
 
 		r.Get("/admin", http.RedirectHandler("/admin/", http.StatusMovedPermanently).ServeHTTP)
 		r.Get("/admin/*", admin.UIHandler().ServeHTTP)

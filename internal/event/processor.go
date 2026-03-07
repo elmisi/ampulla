@@ -5,10 +5,16 @@ import (
 	"encoding/json"
 	"log/slog"
 	"strings"
+	"sync"
 	"time"
 
 	"github.com/elmisi/ampulla/internal/grouping"
 	"github.com/google/uuid"
+)
+
+const (
+	workerCount = 4
+	queueSize   = 1000
 )
 
 // Store defines the database operations needed by the processor.
@@ -19,12 +25,49 @@ type Store interface {
 	InsertSpans(ctx context.Context, txnID int64, traceID uuid.UUID, spans []Span) error
 }
 
+type job struct {
+	projectID int64
+	env       *Envelope
+}
+
 type Processor struct {
 	store Store
+	queue chan job
+	wg    sync.WaitGroup
 }
 
 func NewProcessor(s Store) *Processor {
-	return &Processor{store: s}
+	p := &Processor{
+		store: s,
+		queue: make(chan job, queueSize),
+	}
+	for i := 0; i < workerCount; i++ {
+		p.wg.Add(1)
+		go p.worker()
+	}
+	return p
+}
+
+func (p *Processor) worker() {
+	defer p.wg.Done()
+	for j := range p.queue {
+		p.Process(context.Background(), j.projectID, j.env)
+	}
+}
+
+// Enqueue submits a job for async processing. Drops the job if the queue is full.
+func (p *Processor) Enqueue(projectID int64, env *Envelope) {
+	select {
+	case p.queue <- job{projectID: projectID, env: env}:
+	default:
+		slog.Warn("event queue full, dropping event", "project", projectID, "event", env.Header.EventID)
+	}
+}
+
+// Close shuts down the worker pool and waits for in-flight jobs to complete.
+func (p *Processor) Close() {
+	close(p.queue)
+	p.wg.Wait()
 }
 
 // Process handles all items in an envelope for the given project.

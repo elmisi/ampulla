@@ -10,16 +10,25 @@ import (
 	"net/http"
 	"strconv"
 	"strings"
+	"sync"
 	"time"
 )
 
 const cookieName = "ampulla_session"
 const sessionDuration = 24 * time.Hour
 
+const (
+	loginRateLimit  = 5
+	loginRateWindow = 5 * time.Minute
+)
+
 type Auth struct {
 	username      string
 	password      string
 	sessionSecret []byte
+
+	mu           sync.Mutex
+	loginAttempts map[string][]time.Time
 }
 
 func NewAuth(username, password string, secret []byte) *Auth {
@@ -27,10 +36,17 @@ func NewAuth(username, password string, secret []byte) *Auth {
 		username:      username,
 		password:      password,
 		sessionSecret: secret,
+		loginAttempts: make(map[string][]time.Time),
 	}
 }
 
 func (a *Auth) Login(w http.ResponseWriter, r *http.Request) {
+	ip := r.RemoteAddr
+	if !a.allowLogin(ip) {
+		http.Error(w, `{"error":"too many attempts"}`, http.StatusTooManyRequests)
+		return
+	}
+
 	var req struct {
 		Username string `json:"username"`
 		Password string `json:"password"`
@@ -42,6 +58,7 @@ func (a *Auth) Login(w http.ResponseWriter, r *http.Request) {
 
 	if subtle.ConstantTimeCompare([]byte(req.Username), []byte(a.username)) != 1 ||
 		subtle.ConstantTimeCompare([]byte(req.Password), []byte(a.password)) != 1 {
+		a.recordAttempt(ip)
 		http.Error(w, `{"error":"invalid credentials"}`, http.StatusUnauthorized)
 		return
 	}
@@ -57,12 +74,39 @@ func (a *Auth) Login(w http.ResponseWriter, r *http.Request) {
 		Value:    cookieValue,
 		Path:     "/",
 		HttpOnly: true,
+		Secure:   true,
 		SameSite: http.SameSiteLaxMode,
 		MaxAge:   int(sessionDuration.Seconds()),
 	})
 
 	w.Header().Set("Content-Type", "application/json")
 	w.Write([]byte(`{"user":"` + req.Username + `"}`))
+}
+
+func (a *Auth) allowLogin(ip string) bool {
+	a.mu.Lock()
+	defer a.mu.Unlock()
+
+	now := time.Now()
+	cutoff := now.Add(-loginRateWindow)
+
+	attempts := a.loginAttempts[ip]
+	// Remove expired entries
+	valid := attempts[:0]
+	for _, t := range attempts {
+		if t.After(cutoff) {
+			valid = append(valid, t)
+		}
+	}
+	a.loginAttempts[ip] = valid
+
+	return len(valid) < loginRateLimit
+}
+
+func (a *Auth) recordAttempt(ip string) {
+	a.mu.Lock()
+	defer a.mu.Unlock()
+	a.loginAttempts[ip] = append(a.loginAttempts[ip], time.Now())
 }
 
 func (a *Auth) Logout(w http.ResponseWriter, r *http.Request) {

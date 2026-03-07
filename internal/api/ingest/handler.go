@@ -1,14 +1,15 @@
 package ingest
 
 import (
-	"context"
 	"encoding/json"
 	"log/slog"
 	"net/http"
+	"strconv"
 
 	"github.com/elmisi/ampulla/internal/auth"
 	"github.com/elmisi/ampulla/internal/envelope"
 	"github.com/elmisi/ampulla/internal/event"
+	"github.com/go-chi/chi/v5"
 )
 
 type Handler struct {
@@ -27,6 +28,15 @@ func (h *Handler) Envelope(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	// Validate URL project ID matches authenticated project
+	urlProjectID, err := strconv.ParseInt(chi.URLParam(r, "projectID"), 10, 64)
+	if err != nil || urlProjectID != project.ID {
+		http.Error(w, `{"error":"project mismatch"}`, http.StatusBadRequest)
+		return
+	}
+
+	r.Body = http.MaxBytesReader(w, r.Body, 1<<20) // 1 MB limit
+
 	env, err := envelope.Parse(r.Body)
 	if err != nil {
 		slog.Warn("envelope parse error", "project", project.ID, "error", err)
@@ -34,9 +44,7 @@ func (h *Handler) Envelope(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	// Process asynchronously — return 200 immediately
-	// Use background context since request context will be cancelled after response
-	go h.processor.Process(context.Background(), project.ID, env)
+	h.processor.Enqueue(project.ID, env)
 
 	w.Header().Set("Content-Type", "application/json")
 	w.WriteHeader(http.StatusOK)
@@ -51,6 +59,15 @@ func (h *Handler) Store(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	// Validate URL project ID matches authenticated project
+	urlProjectID, err := strconv.ParseInt(chi.URLParam(r, "projectID"), 10, 64)
+	if err != nil || urlProjectID != project.ID {
+		http.Error(w, `{"error":"project mismatch"}`, http.StatusBadRequest)
+		return
+	}
+
+	r.Body = http.MaxBytesReader(w, r.Body, 1<<20) // 1 MB limit
+
 	env, err := envelope.ParseStoreRequest(r.Body)
 	if err != nil {
 		slog.Warn("store parse error", "project", project.ID, "error", err)
@@ -58,7 +75,7 @@ func (h *Handler) Store(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	go h.processor.Process(context.Background(), project.ID, env)
+	h.processor.Enqueue(project.ID, env)
 
 	w.Header().Set("Content-Type", "application/json")
 	w.WriteHeader(http.StatusOK)

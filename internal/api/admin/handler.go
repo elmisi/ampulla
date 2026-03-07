@@ -40,6 +40,10 @@ func (h *Handler) CreateOrganization(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, `{"error":"name and slug required"}`, http.StatusBadRequest)
 		return
 	}
+	if len(req.Name) > 255 || len(req.Slug) > 64 {
+		http.Error(w, `{"error":"name max 255 chars, slug max 64 chars"}`, http.StatusBadRequest)
+		return
+	}
 	org, err := h.db.CreateOrganization(r.Context(), req.Name, req.Slug)
 	if err != nil {
 		serverError(w, err)
@@ -60,6 +64,10 @@ func (h *Handler) UpdateOrganization(w http.ResponseWriter, r *http.Request) {
 	}
 	if err := json.NewDecoder(r.Body).Decode(&req); err != nil || req.Name == "" || req.Slug == "" {
 		http.Error(w, `{"error":"name and slug required"}`, http.StatusBadRequest)
+		return
+	}
+	if len(req.Name) > 255 || len(req.Slug) > 64 {
+		http.Error(w, `{"error":"name max 255 chars, slug max 64 chars"}`, http.StatusBadRequest)
 		return
 	}
 	if err := h.db.UpdateOrganization(r.Context(), id, req.Name, req.Slug); err != nil {
@@ -114,6 +122,10 @@ func (h *Handler) CreateProject(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, `{"error":"orgId, name, and slug required"}`, http.StatusBadRequest)
 		return
 	}
+	if len(req.Name) > 255 || len(req.Slug) > 64 {
+		http.Error(w, `{"error":"name max 255 chars, slug max 64 chars"}`, http.StatusBadRequest)
+		return
+	}
 	proj, err := h.db.CreateProject(r.Context(), req.OrgID, req.Name, req.Slug, req.Platform)
 	if err != nil {
 		serverError(w, err)
@@ -135,6 +147,10 @@ func (h *Handler) UpdateProject(w http.ResponseWriter, r *http.Request) {
 	}
 	if err := json.NewDecoder(r.Body).Decode(&req); err != nil || req.Name == "" || req.Slug == "" {
 		http.Error(w, `{"error":"name and slug required"}`, http.StatusBadRequest)
+		return
+	}
+	if len(req.Name) > 255 || len(req.Slug) > 64 {
+		http.Error(w, `{"error":"name max 255 chars, slug max 64 chars"}`, http.StatusBadRequest)
 		return
 	}
 	if err := h.db.UpdateProject(r.Context(), id, req.Name, req.Slug, req.Platform); err != nil {
@@ -215,6 +231,10 @@ func (h *Handler) CreateProjectKey(w http.ResponseWriter, r *http.Request) {
 	if req.Label == "" {
 		req.Label = "Default"
 	}
+	if len(req.Label) > 128 {
+		http.Error(w, `{"error":"label max 128 chars"}`, http.StatusBadRequest)
+		return
+	}
 	key, err := h.db.CreateProjectKey(r.Context(), projectID, req.Label)
 	if err != nil {
 		serverError(w, err)
@@ -280,6 +300,10 @@ func (h *Handler) UpdateIssue(w http.ResponseWriter, r *http.Request) {
 	}
 	if err := json.NewDecoder(r.Body).Decode(&req); err != nil || req.Status == "" {
 		http.Error(w, `{"error":"status required"}`, http.StatusBadRequest)
+		return
+	}
+	if req.Status != "unresolved" && req.Status != "resolved" && req.Status != "ignored" {
+		http.Error(w, `{"error":"status must be unresolved, resolved, or ignored"}`, http.StatusBadRequest)
 		return
 	}
 	if err := h.db.UpdateIssueStatus(r.Context(), id, req.Status); err != nil {

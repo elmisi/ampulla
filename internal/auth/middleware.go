@@ -29,17 +29,19 @@ type cachedKey struct {
 }
 
 type Middleware struct {
-	db    *store.DB
-	cache map[string]*cachedKey
-	mu    sync.RWMutex
-	ttl   time.Duration
+	db          *store.DB
+	cache       map[string]*cachedKey
+	mu          sync.RWMutex
+	ttl         time.Duration
+	lastCleanup time.Time
 }
 
 func NewMiddleware(db *store.DB) *Middleware {
 	return &Middleware{
-		db:    db,
-		cache: make(map[string]*cachedKey),
-		ttl:   5 * time.Minute,
+		db:          db,
+		cache:       make(map[string]*cachedKey),
+		ttl:         5 * time.Minute,
+		lastCleanup: time.Now(),
 	}
 }
 
@@ -87,9 +89,24 @@ func (m *Middleware) lookupKey(ctx context.Context, publicKey string) (*event.Pr
 		key:       key,
 		fetchedAt: time.Now(),
 	}
+	m.evictExpired()
 	m.mu.Unlock()
 
 	return project, key, nil
+}
+
+// evictExpired removes stale cache entries. Must be called with m.mu held for writing.
+func (m *Middleware) evictExpired() {
+	now := time.Now()
+	if now.Sub(m.lastCleanup) < time.Minute {
+		return
+	}
+	m.lastCleanup = now
+	for k, v := range m.cache {
+		if now.Sub(v.fetchedAt) >= m.ttl {
+			delete(m.cache, k)
+		}
+	}
 }
 
 // extractPublicKey gets the DSN public key from the request.
