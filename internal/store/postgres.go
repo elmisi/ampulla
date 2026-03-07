@@ -7,6 +7,8 @@ import (
 	"log/slog"
 	"time"
 
+	"strings"
+
 	"github.com/elmisi/ampulla/internal/event"
 	"github.com/golang-migrate/migrate/v4"
 	_ "github.com/golang-migrate/migrate/v4/database/postgres"
@@ -301,6 +303,251 @@ func (db *DB) ListTransactions(ctx context.Context, orgSlug string, cursor int64
 		txns = append(txns, t)
 	}
 	return txns, nil
+}
+
+// --- Admin CRUD Methods ---
+
+// CreateOrganization creates a new organization.
+func (db *DB) CreateOrganization(ctx context.Context, name, slug string) (*event.Organization, error) {
+	var o event.Organization
+	err := db.pool.QueryRow(ctx, `
+		INSERT INTO organizations (name, slug) VALUES ($1, $2)
+		RETURNING id, name, slug, created_at
+	`, name, slug).Scan(&o.ID, &o.Name, &o.Slug, &o.CreatedAt)
+	if err != nil {
+		return nil, fmt.Errorf("create organization: %w", err)
+	}
+	return &o, nil
+}
+
+// UpdateOrganization updates an organization.
+func (db *DB) UpdateOrganization(ctx context.Context, id int64, name, slug string) error {
+	_, err := db.pool.Exec(ctx, `UPDATE organizations SET name = $1, slug = $2 WHERE id = $3`, name, slug, id)
+	return err
+}
+
+// DeleteOrganization deletes an organization and cascading data.
+func (db *DB) DeleteOrganization(ctx context.Context, id int64) error {
+	_, err := db.pool.Exec(ctx, `DELETE FROM organizations WHERE id = $1`, id)
+	return err
+}
+
+// CreateProject creates a new project.
+func (db *DB) CreateProject(ctx context.Context, orgID int64, name, slug, platform string) (*event.Project, error) {
+	var p event.Project
+	var plat *string
+	if platform != "" {
+		plat = &platform
+	}
+	err := db.pool.QueryRow(ctx, `
+		INSERT INTO projects (org_id, name, slug, platform) VALUES ($1, $2, $3, $4)
+		RETURNING id, org_id, name, slug, platform, created_at
+	`, orgID, name, slug, plat).Scan(&p.ID, &p.OrgID, &p.Name, &p.Slug, &plat, &p.CreatedAt)
+	if err != nil {
+		return nil, fmt.Errorf("create project: %w", err)
+	}
+	if plat != nil {
+		p.Platform = *plat
+	}
+	return &p, nil
+}
+
+// UpdateProject updates a project.
+func (db *DB) UpdateProject(ctx context.Context, id int64, name, slug, platform string) error {
+	var plat *string
+	if platform != "" {
+		plat = &platform
+	}
+	_, err := db.pool.Exec(ctx, `UPDATE projects SET name = $1, slug = $2, platform = $3 WHERE id = $4`, name, slug, plat, id)
+	return err
+}
+
+// DeleteProject deletes a project.
+func (db *DB) DeleteProject(ctx context.Context, id int64) error {
+	_, err := db.pool.Exec(ctx, `DELETE FROM projects WHERE id = $1`, id)
+	return err
+}
+
+// ListAllProjects returns all projects.
+func (db *DB) ListAllProjects(ctx context.Context) ([]event.Project, error) {
+	rows, err := db.pool.Query(ctx, `
+		SELECT p.id, p.org_id, p.name, p.slug, p.platform, p.created_at
+		FROM projects p ORDER BY p.name
+	`)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+
+	var projects []event.Project
+	for rows.Next() {
+		var p event.Project
+		var platform *string
+		if err := rows.Scan(&p.ID, &p.OrgID, &p.Name, &p.Slug, &platform, &p.CreatedAt); err != nil {
+			return nil, err
+		}
+		if platform != nil {
+			p.Platform = *platform
+		}
+		projects = append(projects, p)
+	}
+	return projects, nil
+}
+
+// ListProjectKeys returns DSN keys for a project.
+func (db *DB) ListProjectKeys(ctx context.Context, projectID int64) ([]event.ProjectKey, error) {
+	rows, err := db.pool.Query(ctx, `
+		SELECT id, project_id, public_key, secret_key, label, is_active
+		FROM project_keys WHERE project_id = $1 ORDER BY id
+	`, projectID)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+
+	var keys []event.ProjectKey
+	for rows.Next() {
+		var k event.ProjectKey
+		if err := rows.Scan(&k.ID, &k.ProjectID, &k.PublicKey, &k.SecretKey, &k.Label, &k.IsActive); err != nil {
+			return nil, err
+		}
+		keys = append(keys, k)
+	}
+	return keys, nil
+}
+
+// CreateProjectKey creates a new DSN key pair.
+func (db *DB) CreateProjectKey(ctx context.Context, projectID int64, label string) (*event.ProjectKey, error) {
+	publicKey := generateKey()
+	secretKey := generateKey()
+	var k event.ProjectKey
+	err := db.pool.QueryRow(ctx, `
+		INSERT INTO project_keys (project_id, public_key, secret_key, label) VALUES ($1, $2, $3, $4)
+		RETURNING id, project_id, public_key, secret_key, label, is_active
+	`, projectID, publicKey, secretKey, label).Scan(&k.ID, &k.ProjectID, &k.PublicKey, &k.SecretKey, &k.Label, &k.IsActive)
+	if err != nil {
+		return nil, fmt.Errorf("create project key: %w", err)
+	}
+	return &k, nil
+}
+
+// ToggleProjectKey enables or disables a DSN key.
+func (db *DB) ToggleProjectKey(ctx context.Context, id int64, isActive bool) error {
+	_, err := db.pool.Exec(ctx, `UPDATE project_keys SET is_active = $1 WHERE id = $2`, isActive, id)
+	return err
+}
+
+// DeleteProjectKey deletes a DSN key.
+func (db *DB) DeleteProjectKey(ctx context.Context, id int64) error {
+	_, err := db.pool.Exec(ctx, `DELETE FROM project_keys WHERE id = $1`, id)
+	return err
+}
+
+// AdminListIssues returns issues, optionally filtered by project ID.
+func (db *DB) AdminListIssues(ctx context.Context, projectID, cursor int64, limit int) ([]event.Issue, error) {
+	if limit <= 0 || limit > 100 {
+		limit = 25
+	}
+	query := `SELECT id, project_id, title, fingerprint, level, status, first_seen, last_seen, event_count FROM issues`
+	var args []any
+	if projectID > 0 {
+		query += ` WHERE project_id = $1 AND id > $2 ORDER BY last_seen DESC LIMIT $3`
+		args = []any{projectID, cursor, limit}
+	} else {
+		query += ` WHERE id > $1 ORDER BY last_seen DESC LIMIT $2`
+		args = []any{cursor, limit}
+	}
+	rows, err := db.pool.Query(ctx, query, args...)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+
+	var issues []event.Issue
+	for rows.Next() {
+		var i event.Issue
+		if err := rows.Scan(&i.ID, &i.ProjectID, &i.Title, &i.Fingerprint, &i.Level,
+			&i.Status, &i.FirstSeen, &i.LastSeen, &i.EventCount); err != nil {
+			return nil, err
+		}
+		issues = append(issues, i)
+	}
+	return issues, nil
+}
+
+// UpdateIssueStatus updates the status of an issue.
+func (db *DB) UpdateIssueStatus(ctx context.Context, id int64, status string) error {
+	_, err := db.pool.Exec(ctx, `UPDATE issues SET status = $1 WHERE id = $2`, status, id)
+	return err
+}
+
+// DeleteIssue deletes an issue and its events.
+func (db *DB) DeleteIssue(ctx context.Context, id int64) error {
+	_, err := db.pool.Exec(ctx, `DELETE FROM issues WHERE id = $1`, id)
+	return err
+}
+
+// AdminListTransactions returns all transactions.
+func (db *DB) AdminListTransactions(ctx context.Context, cursor int64, limit int) ([]event.Transaction, error) {
+	if limit <= 0 || limit > 100 {
+		limit = 25
+	}
+	rows, err := db.pool.Query(ctx, `
+		SELECT id, event_id, project_id, trace_id, span_id, op, name,
+		       duration_ms, status, timestamp, data, received_at
+		FROM transactions
+		WHERE id > $1
+		ORDER BY timestamp DESC
+		LIMIT $2
+	`, cursor, limit)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+
+	var txns []event.Transaction
+	for rows.Next() {
+		var t event.Transaction
+		var op, status *string
+		if err := rows.Scan(&t.ID, &t.EventID, &t.ProjectID, &t.TraceID, &t.SpanID,
+			&op, &t.Name, &t.DurationMs, &status, &t.Timestamp, &t.Data, &t.ReceivedAt); err != nil {
+			return nil, err
+		}
+		if op != nil {
+			t.Op = *op
+		}
+		if status != nil {
+			t.Status = *status
+		}
+		txns = append(txns, t)
+	}
+	return txns, nil
+}
+
+// DashboardStats returns aggregate counts.
+func (db *DB) DashboardStats(ctx context.Context) (map[string]int64, error) {
+	stats := map[string]int64{}
+	for _, q := range []struct {
+		key   string
+		query string
+	}{
+		{"organizations", "SELECT COUNT(*) FROM organizations"},
+		{"projects", "SELECT COUNT(*) FROM projects"},
+		{"issues", "SELECT COUNT(*) FROM issues"},
+		{"events", "SELECT COUNT(*) FROM events"},
+		{"transactions", "SELECT COUNT(*) FROM transactions"},
+	} {
+		var count int64
+		if err := db.pool.QueryRow(ctx, q.query).Scan(&count); err != nil {
+			return nil, err
+		}
+		stats[q.key] = count
+	}
+	return stats, nil
+}
+
+func generateKey() string {
+	return strings.ReplaceAll(uuid.New().String(), "-", "")
 }
 
 // GetProjectByOrgAndSlug returns a project by org slug and project slug.

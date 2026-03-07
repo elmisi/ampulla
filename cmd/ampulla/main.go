@@ -9,6 +9,8 @@ import (
 	"syscall"
 	"time"
 
+	"github.com/elmisi/ampulla/internal/admin"
+	adminapi "github.com/elmisi/ampulla/internal/api/admin"
 	"github.com/elmisi/ampulla/internal/api/ingest"
 	"github.com/elmisi/ampulla/internal/api/web"
 	"github.com/elmisi/ampulla/internal/auth"
@@ -71,6 +73,49 @@ func main() {
 		r.Get("/issues/{issueID}/events/", webHandler.ListEvents)
 		r.Get("/organizations/{orgSlug}/events/", webHandler.ListTransactions)
 	})
+
+	// Admin UI + API
+	if cfg.AdminEnabled() {
+		adminAuth := admin.NewAuth(cfg.AdminUser, cfg.AdminPassword, cfg.SessionSecret)
+		adminHandler := adminapi.NewHandler(db, cfg.Domain)
+
+		r.Get("/admin", http.RedirectHandler("/admin/", http.StatusMovedPermanently).ServeHTTP)
+		r.Get("/admin/*", admin.UIHandler().ServeHTTP)
+
+		r.Route("/api/admin", func(r chi.Router) {
+			r.Post("/login", adminAuth.Login)
+			r.Post("/logout", adminAuth.Logout)
+			r.Group(func(r chi.Router) {
+				r.Use(adminAuth.SessionMiddleware)
+				r.Get("/me", adminAuth.Me)
+				r.Get("/dashboard", adminHandler.Dashboard)
+
+				r.Get("/organizations", adminHandler.ListOrganizations)
+				r.Post("/organizations", adminHandler.CreateOrganization)
+				r.Put("/organizations/{id}", adminHandler.UpdateOrganization)
+				r.Delete("/organizations/{id}", adminHandler.DeleteOrganization)
+
+				r.Get("/organizations/{orgSlug}/projects", adminHandler.ListProjects)
+				r.Get("/projects", adminHandler.ListAllProjects)
+				r.Post("/projects", adminHandler.CreateProject)
+				r.Put("/projects/{id}", adminHandler.UpdateProject)
+				r.Delete("/projects/{id}", adminHandler.DeleteProject)
+
+				r.Get("/projects/{id}/keys", adminHandler.ListProjectKeys)
+				r.Post("/projects/{id}/keys", adminHandler.CreateProjectKey)
+				r.Put("/keys/{id}", adminHandler.ToggleProjectKey)
+				r.Delete("/keys/{id}", adminHandler.DeleteProjectKey)
+
+				r.Get("/issues", adminHandler.ListIssues)
+				r.Put("/issues/{id}", adminHandler.UpdateIssue)
+				r.Delete("/issues/{id}", adminHandler.DeleteIssue)
+				r.Get("/issues/{id}/events", adminHandler.ListIssueEvents)
+
+				r.Get("/transactions", adminHandler.ListTransactions)
+			})
+		})
+		slog.Info("admin UI enabled", "path", "/admin/")
+	}
 
 	srv := &http.Server{
 		Addr:         cfg.Addr(),

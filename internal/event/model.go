@@ -24,8 +24,8 @@ type Project struct {
 }
 
 type ProjectKey struct {
-	ID        int64  `json:"-"`
-	ProjectID int64  `json:"-"`
+	ID        int64  `json:"id"`
+	ProjectID int64  `json:"projectId"`
 	PublicKey string `json:"public"`
 	SecretKey string `json:"secret"`
 	Label     string `json:"label"`
