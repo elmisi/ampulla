@@ -83,26 +83,43 @@ func (db *DB) GetProjectByKey(ctx context.Context, publicKey string) (*event.Pro
 }
 
 // UpsertIssue creates or updates an issue based on fingerprint.
-func (db *DB) UpsertIssue(ctx context.Context, projectID int64, fingerprint, title, level string, ts time.Time) (*event.Issue, error) {
+// Returns the issue and whether it's new or a regression (was resolved).
+func (db *DB) UpsertIssue(ctx context.Context, projectID int64, fingerprint, title, level string, ts time.Time) (*event.UpsertResult, error) {
+	// CTE captures old status before the upsert modifies it.
+	// xmax = 0 in RETURNING means the row was INSERTed (new issue).
 	row := db.pool.QueryRow(ctx, `
+		WITH old AS (
+			SELECT status FROM issues WHERE project_id = $1 AND fingerprint = $3
+		)
 		INSERT INTO issues (project_id, title, fingerprint, level, first_seen, last_seen, event_count)
 		VALUES ($1, $2, $3, $4, $5, $5, 1)
 		ON CONFLICT (project_id, fingerprint) DO UPDATE SET
 			last_seen = GREATEST(issues.last_seen, EXCLUDED.last_seen),
 			event_count = issues.event_count + 1,
-			title = EXCLUDED.title
-		RETURNING id, project_id, title, fingerprint, level, status, first_seen, last_seen, event_count
+			title = EXCLUDED.title,
+			status = CASE WHEN issues.status = 'resolved' THEN 'unresolved' ELSE issues.status END
+		RETURNING id, project_id, title, fingerprint, level, status, first_seen, last_seen, event_count,
+			(xmax = 0) AS is_new,
+			COALESCE((SELECT status FROM old), '') AS old_status
 	`, projectID, title, fingerprint, level, ts)
 
 	var issue event.Issue
+	var isNew bool
+	var oldStatus string
 	err := row.Scan(
 		&issue.ID, &issue.ProjectID, &issue.Title, &issue.Fingerprint,
 		&issue.Level, &issue.Status, &issue.FirstSeen, &issue.LastSeen, &issue.EventCount,
+		&isNew, &oldStatus,
 	)
 	if err != nil {
 		return nil, fmt.Errorf("upsert issue: %w", err)
 	}
-	return &issue, nil
+
+	return &event.UpsertResult{
+		Issue:        &issue,
+		IsNew:        isNew,
+		IsRegression: !isNew && oldStatus == "resolved",
+	}, nil
 }
 
 // InsertEvent stores an error event.
@@ -184,7 +201,7 @@ func (db *DB) ListOrganizations(ctx context.Context) ([]event.Organization, erro
 // ListProjects returns projects for an organization slug.
 func (db *DB) ListProjects(ctx context.Context, orgSlug string) ([]event.Project, error) {
 	rows, err := db.pool.Query(ctx, `
-		SELECT p.id, p.org_id, p.name, p.slug, p.platform, p.created_at
+		SELECT p.id, p.org_id, p.name, p.slug, p.platform, p.created_at, p.ntfy_url, p.ntfy_topic, p.ntfy_token
 		FROM projects p
 		JOIN organizations o ON o.id = p.org_id
 		WHERE o.slug = $1
@@ -198,12 +215,21 @@ func (db *DB) ListProjects(ctx context.Context, orgSlug string) ([]event.Project
 	var projects []event.Project
 	for rows.Next() {
 		var p event.Project
-		var platform *string
-		if err := rows.Scan(&p.ID, &p.OrgID, &p.Name, &p.Slug, &platform, &p.CreatedAt); err != nil {
+		var platform, ntfyURL, ntfyTopic, ntfyToken *string
+		if err := rows.Scan(&p.ID, &p.OrgID, &p.Name, &p.Slug, &platform, &p.CreatedAt, &ntfyURL, &ntfyTopic, &ntfyToken); err != nil {
 			return nil, err
 		}
 		if platform != nil {
 			p.Platform = *platform
+		}
+		if ntfyURL != nil {
+			p.NtfyURL = *ntfyURL
+		}
+		if ntfyTopic != nil {
+			p.NtfyTopic = *ntfyTopic
+		}
+		if ntfyToken != nil {
+			p.NtfyToken = *ntfyToken
 		}
 		projects = append(projects, p)
 	}
@@ -368,12 +394,22 @@ func (db *DB) CreateProject(ctx context.Context, orgID int64, name, slug, platfo
 }
 
 // UpdateProject updates a project.
-func (db *DB) UpdateProject(ctx context.Context, id int64, name, slug, platform string) error {
-	var plat *string
+func (db *DB) UpdateProject(ctx context.Context, id int64, name, slug, platform, ntfyURL, ntfyTopic, ntfyToken string) error {
+	var plat, nURL, nTopic, nToken *string
 	if platform != "" {
 		plat = &platform
 	}
-	_, err := db.pool.Exec(ctx, `UPDATE projects SET name = $1, slug = $2, platform = $3 WHERE id = $4`, name, slug, plat, id)
+	if ntfyURL != "" {
+		nURL = &ntfyURL
+	}
+	if ntfyTopic != "" {
+		nTopic = &ntfyTopic
+	}
+	if ntfyToken != "" {
+		nToken = &ntfyToken
+	}
+	_, err := db.pool.Exec(ctx, `UPDATE projects SET name = $1, slug = $2, platform = $3, ntfy_url = $4, ntfy_topic = $5, ntfy_token = $6 WHERE id = $7`,
+		name, slug, plat, nURL, nTopic, nToken, id)
 	return err
 }
 
@@ -386,7 +422,7 @@ func (db *DB) DeleteProject(ctx context.Context, id int64) error {
 // ListAllProjects returns all projects.
 func (db *DB) ListAllProjects(ctx context.Context) ([]event.Project, error) {
 	rows, err := db.pool.Query(ctx, `
-		SELECT p.id, p.org_id, p.name, p.slug, p.platform, p.created_at
+		SELECT p.id, p.org_id, p.name, p.slug, p.platform, p.created_at, p.ntfy_url, p.ntfy_topic, p.ntfy_token
 		FROM projects p ORDER BY p.name
 	`)
 	if err != nil {
@@ -397,12 +433,21 @@ func (db *DB) ListAllProjects(ctx context.Context) ([]event.Project, error) {
 	var projects []event.Project
 	for rows.Next() {
 		var p event.Project
-		var platform *string
-		if err := rows.Scan(&p.ID, &p.OrgID, &p.Name, &p.Slug, &platform, &p.CreatedAt); err != nil {
+		var platform, ntfyURL, ntfyTopic, ntfyToken *string
+		if err := rows.Scan(&p.ID, &p.OrgID, &p.Name, &p.Slug, &platform, &p.CreatedAt, &ntfyURL, &ntfyTopic, &ntfyToken); err != nil {
 			return nil, err
 		}
 		if platform != nil {
 			p.Platform = *platform
+		}
+		if ntfyURL != nil {
+			p.NtfyURL = *ntfyURL
+		}
+		if ntfyTopic != nil {
+			p.NtfyTopic = *ntfyTopic
+		}
+		if ntfyToken != nil {
+			p.NtfyToken = *ntfyToken
 		}
 		projects = append(projects, p)
 	}
@@ -645,6 +690,25 @@ func (db *DB) GetPerformanceStats(ctx context.Context, projectID int64, days int
 	return stats, nil
 }
 
+// GetProjectNtfyConfig returns the ntfy notification config for a project.
+func (db *DB) GetProjectNtfyConfig(ctx context.Context, projectID int64) (ntfyURL, ntfyTopic, ntfyToken string, err error) {
+	var url, topic, token *string
+	err = db.pool.QueryRow(ctx, `SELECT ntfy_url, ntfy_topic, ntfy_token FROM projects WHERE id = $1`, projectID).Scan(&url, &topic, &token)
+	if err != nil {
+		return "", "", "", err
+	}
+	if url != nil {
+		ntfyURL = *url
+	}
+	if topic != nil {
+		ntfyTopic = *topic
+	}
+	if token != nil {
+		ntfyToken = *token
+	}
+	return
+}
+
 // DeleteOldTransactions removes transactions (and their spans via CASCADE) older than before.
 func (db *DB) DeleteOldTransactions(ctx context.Context, before time.Time) (int64, error) {
 	tag, err := db.pool.Exec(ctx, `DELETE FROM transactions WHERE timestamp < $1`, before)
@@ -661,20 +725,29 @@ func generateKey() string {
 // GetProjectByOrgAndSlug returns a project by org slug and project slug.
 func (db *DB) GetProjectByOrgAndSlug(ctx context.Context, orgSlug, projectSlug string) (*event.Project, error) {
 	row := db.pool.QueryRow(ctx, `
-		SELECT p.id, p.org_id, p.name, p.slug, p.platform, p.created_at
+		SELECT p.id, p.org_id, p.name, p.slug, p.platform, p.created_at, p.ntfy_url, p.ntfy_topic, p.ntfy_token
 		FROM projects p
 		JOIN organizations o ON o.id = p.org_id
 		WHERE o.slug = $1 AND p.slug = $2
 	`, orgSlug, projectSlug)
 
 	var p event.Project
-	var platform *string
-	err := row.Scan(&p.ID, &p.OrgID, &p.Name, &p.Slug, &platform, &p.CreatedAt)
+	var platform, ntfyURL, ntfyTopic, ntfyToken *string
+	err := row.Scan(&p.ID, &p.OrgID, &p.Name, &p.Slug, &platform, &p.CreatedAt, &ntfyURL, &ntfyTopic, &ntfyToken)
 	if err != nil {
 		return nil, err
 	}
 	if platform != nil {
 		p.Platform = *platform
+	}
+	if ntfyURL != nil {
+		p.NtfyURL = *ntfyURL
+	}
+	if ntfyTopic != nil {
+		p.NtfyTopic = *ntfyTopic
+	}
+	if ntfyToken != nil {
+		p.NtfyToken = *ntfyToken
 	}
 	return &p, nil
 }

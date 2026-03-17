@@ -478,6 +478,28 @@ async function renderProjectForm(proj) {
   const pi = el('input', { type: 'text', value: proj?.platform || '', placeholder: 'javascript, python, go...' });
   pg.appendChild(pi);
   form.appendChild(pg);
+
+  // ntfy notification config
+  if (isEdit) {
+    form.appendChild(el('h3', { style: 'margin-top:16px;margin-bottom:8px;color:var(--muted)' }, 'Notifications (ntfy)'));
+    const ntfyRow = el('div', { className: 'form-row' });
+    const nug = el('div', { className: 'form-group' }, el('label', null, 'ntfy Server URL'));
+    const nui = el('input', { type: 'text', value: proj?.ntfyUrl || '', placeholder: 'https://n.elmisi.com' });
+    nug.appendChild(nui);
+    const ntg = el('div', { className: 'form-group' }, el('label', null, 'Topic'));
+    const nti = el('input', { type: 'text', value: proj?.ntfyTopic || '', placeholder: 'my-project-errors' });
+    ntg.appendChild(nti);
+    ntfyRow.append(nug, ntg);
+    form.appendChild(ntfyRow);
+    const nkg = el('div', { className: 'form-group' }, el('label', null, 'Token (optional)'));
+    const nki = el('input', { type: 'password', value: proj?.ntfyToken || '', placeholder: 'Bearer token' });
+    nkg.appendChild(nki);
+    form.appendChild(nkg);
+    form._ntfyUrl = nui;
+    form._ntfyTopic = nti;
+    form._ntfyToken = nki;
+  }
+
   const actions = el('div', { className: 'toolbar' });
   actions.appendChild(el('button', { type: 'submit', className: 'primary' }, isEdit ? 'Save' : 'Create'));
   actions.appendChild(el('button', { type: 'button', onClick: () => history.back() }, 'Cancel'));
@@ -486,7 +508,10 @@ async function renderProjectForm(proj) {
     e.preventDefault();
     try {
       if (isEdit) {
-        await api.put('/projects/' + proj.id, { name: ni.value, slug: si.value, platform: pi.value });
+        await api.put('/projects/' + proj.id, {
+          name: ni.value, slug: si.value, platform: pi.value,
+          ntfyUrl: form._ntfyUrl?.value || '', ntfyTopic: form._ntfyTopic?.value || '', ntfyToken: form._ntfyToken?.value || ''
+        });
         toast('Project updated');
       } else {
         const orgId = parseInt(form._orgSelect.value);

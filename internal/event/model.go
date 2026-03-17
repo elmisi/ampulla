@@ -21,6 +21,9 @@ type Project struct {
 	Slug      string    `json:"slug"`
 	Platform  string    `json:"platform,omitempty"`
 	CreatedAt time.Time `json:"dateCreated"`
+	NtfyURL   string    `json:"ntfyUrl,omitempty"`
+	NtfyTopic string    `json:"ntfyTopic,omitempty"`
+	NtfyToken string    `json:"ntfyToken,omitempty"`
 }
 
 type ProjectKey struct {
@@ -84,6 +87,13 @@ type Span struct {
 	Status        string          `json:"status,omitempty"`
 	Timestamp     time.Time       `json:"startTimestamp"`
 	Data          json.RawMessage `json:"data,omitempty"`
+}
+
+// UpsertResult wraps an issue with notification context.
+type UpsertResult struct {
+	Issue       *Issue
+	IsNew       bool // first time this fingerprint was seen
+	IsRegression bool // was resolved, now has a new event
 }
 
 // Performance analytics types

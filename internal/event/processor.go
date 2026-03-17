@@ -3,7 +3,9 @@ package event
 import (
 	"context"
 	"encoding/json"
+	"fmt"
 	"log/slog"
+	"net/http"
 	"strings"
 	"sync"
 	"time"
@@ -21,11 +23,12 @@ const (
 
 // Store defines the database operations needed by the processor.
 type Store interface {
-	UpsertIssue(ctx context.Context, projectID int64, fingerprint, title, level string, ts time.Time) (*Issue, error)
+	UpsertIssue(ctx context.Context, projectID int64, fingerprint, title, level string, ts time.Time) (*UpsertResult, error)
 	InsertEvent(ctx context.Context, e *Event) error
 	InsertTransaction(ctx context.Context, t *Transaction) (int64, error)
 	InsertSpans(ctx context.Context, txnID int64, traceID uuid.UUID, spans []Span) error
 	DeleteOldTransactions(ctx context.Context, before time.Time) (int64, error)
+	GetProjectNtfyConfig(ctx context.Context, projectID int64) (ntfyURL, ntfyTopic, ntfyToken string, err error)
 }
 
 type job struct {
@@ -107,6 +110,51 @@ func (p *Processor) runCleanup() {
 	}
 }
 
+func (p *Processor) sendNtfy(projectID int64, result *UpsertResult) {
+	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+	defer cancel()
+
+	ntfyURL, ntfyTopic, ntfyToken, err := p.store.GetProjectNtfyConfig(ctx, projectID)
+	if err != nil || ntfyURL == "" || ntfyTopic == "" {
+		return // ntfy not configured for this project
+	}
+
+	issue := result.Issue
+	var tag, title string
+	if result.IsNew {
+		tag = "rotating_light"
+		title = fmt.Sprintf("[%s] New: %s", issue.Level, issue.Title)
+	} else {
+		tag = "rewind"
+		title = fmt.Sprintf("[%s] Regression: %s", issue.Level, issue.Title)
+	}
+
+	body := fmt.Sprintf("Events: %d\nFirst seen: %s", issue.EventCount, issue.FirstSeen.Format("2006-01-02 15:04"))
+
+	url := fmt.Sprintf("%s/%s", strings.TrimRight(ntfyURL, "/"), ntfyTopic)
+	req, err := http.NewRequestWithContext(ctx, "POST", url, strings.NewReader(body))
+	if err != nil {
+		slog.Warn("ntfy request build failed", "project", projectID, "error", err)
+		return
+	}
+	req.Header.Set("Title", title)
+	req.Header.Set("Tags", tag)
+	req.Header.Set("Priority", "default")
+	if ntfyToken != "" {
+		req.Header.Set("Authorization", "Bearer "+ntfyToken)
+	}
+
+	resp, err := http.DefaultClient.Do(req)
+	if err != nil {
+		slog.Warn("ntfy send failed", "project", projectID, "error", err)
+		return
+	}
+	resp.Body.Close()
+	if resp.StatusCode >= 400 {
+		slog.Warn("ntfy returned error", "project", projectID, "status", resp.StatusCode)
+	}
+}
+
 // Process handles all items in an envelope for the given project.
 func (p *Processor) Process(ctx context.Context, projectID int64, env *Envelope) {
 	for _, item := range env.Items {
@@ -157,7 +205,7 @@ func (p *Processor) processEvent(ctx context.Context, projectID int64, payload j
 	fingerprint := grouping.Compute(payload)
 	title := grouping.Title(payload)
 
-	issue, err := p.store.UpsertIssue(ctx, projectID, fingerprint, title, level, ts)
+	result, err := p.store.UpsertIssue(ctx, projectID, fingerprint, title, level, ts)
 	if err != nil {
 		return err
 	}
@@ -165,7 +213,7 @@ func (p *Processor) processEvent(ctx context.Context, projectID int64, payload j
 	e := &Event{
 		EventID:   eventID,
 		ProjectID: projectID,
-		IssueID:   issue.ID,
+		IssueID:   result.Issue.ID,
 		Timestamp: ts,
 		Platform:  raw.Platform,
 		Level:     level,
@@ -173,7 +221,16 @@ func (p *Processor) processEvent(ctx context.Context, projectID int64, payload j
 		Data:      payload,
 	}
 
-	return p.store.InsertEvent(ctx, e)
+	if err := p.store.InsertEvent(ctx, e); err != nil {
+		return err
+	}
+
+	// Send ntfy notification for new issues and regressions
+	if result.IsNew || result.IsRegression {
+		go p.sendNtfy(projectID, result)
+	}
+
+	return nil
 }
 
 func (p *Processor) processTransaction(ctx context.Context, projectID int64, payload json.RawMessage) error {
