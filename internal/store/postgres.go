@@ -562,30 +562,58 @@ func (db *DB) DashboardStats(ctx context.Context) (map[string]int64, error) {
 }
 
 // GetPerformanceStats returns endpoint performance percentiles for the last 7 days.
-func (db *DB) GetPerformanceStats(ctx context.Context) (*event.PerformanceStats, error) {
+// If projectID > 0, filters by project.
+func (db *DB) GetPerformanceStats(ctx context.Context, projectID int64) (*event.PerformanceStats, error) {
 	stats := &event.PerformanceStats{}
 
 	// Total count and oldest transaction
-	err := db.pool.QueryRow(ctx, `SELECT COUNT(*), MIN(timestamp) FROM transactions`).Scan(&stats.TotalCount, &stats.OldestTimestamp)
-	if err != nil {
-		return nil, fmt.Errorf("performance total: %w", err)
+	if projectID > 0 {
+		err := db.pool.QueryRow(ctx, `SELECT COUNT(*), MIN(timestamp) FROM transactions WHERE project_id = $1`, projectID).Scan(&stats.TotalCount, &stats.OldestTimestamp)
+		if err != nil {
+			return nil, fmt.Errorf("performance total: %w", err)
+		}
+	} else {
+		err := db.pool.QueryRow(ctx, `SELECT COUNT(*), MIN(timestamp) FROM transactions`).Scan(&stats.TotalCount, &stats.OldestTimestamp)
+		if err != nil {
+			return nil, fmt.Errorf("performance total: %w", err)
+		}
 	}
 
 	// Per-endpoint percentiles (last 7 days)
-	rows, err := db.pool.Query(ctx, `
-		SELECT
-			name, op, count(*) as cnt,
-			round(avg(duration_ms)::numeric, 1),
-			round(percentile_cont(0.50) WITHIN GROUP (ORDER BY duration_ms)::numeric, 1),
-			round(percentile_cont(0.75) WITHIN GROUP (ORDER BY duration_ms)::numeric, 1),
-			round(percentile_cont(0.95) WITHIN GROUP (ORDER BY duration_ms)::numeric, 1),
-			round(percentile_cont(0.99) WITHIN GROUP (ORDER BY duration_ms)::numeric, 1)
-		FROM transactions
-		WHERE timestamp > now() - interval '7 days'
-		GROUP BY name, op
-		ORDER BY cnt DESC
-		LIMIT 20
-	`)
+	var query string
+	var args []any
+	if projectID > 0 {
+		query = `
+			SELECT
+				name, op, count(*) as cnt,
+				round(avg(duration_ms)::numeric, 1),
+				round(percentile_cont(0.50) WITHIN GROUP (ORDER BY duration_ms)::numeric, 1),
+				round(percentile_cont(0.75) WITHIN GROUP (ORDER BY duration_ms)::numeric, 1),
+				round(percentile_cont(0.95) WITHIN GROUP (ORDER BY duration_ms)::numeric, 1),
+				round(percentile_cont(0.99) WITHIN GROUP (ORDER BY duration_ms)::numeric, 1)
+			FROM transactions
+			WHERE timestamp > now() - interval '7 days' AND project_id = $1
+			GROUP BY name, op
+			ORDER BY cnt DESC
+			LIMIT 20`
+		args = []any{projectID}
+	} else {
+		query = `
+			SELECT
+				name, op, count(*) as cnt,
+				round(avg(duration_ms)::numeric, 1),
+				round(percentile_cont(0.50) WITHIN GROUP (ORDER BY duration_ms)::numeric, 1),
+				round(percentile_cont(0.75) WITHIN GROUP (ORDER BY duration_ms)::numeric, 1),
+				round(percentile_cont(0.95) WITHIN GROUP (ORDER BY duration_ms)::numeric, 1),
+				round(percentile_cont(0.99) WITHIN GROUP (ORDER BY duration_ms)::numeric, 1)
+			FROM transactions
+			WHERE timestamp > now() - interval '7 days'
+			GROUP BY name, op
+			ORDER BY cnt DESC
+			LIMIT 20`
+	}
+
+	rows, err := db.pool.Query(ctx, query, args...)
 	if err != nil {
 		return nil, fmt.Errorf("performance endpoints: %w", err)
 	}

@@ -368,7 +368,8 @@ func (h *Handler) Dashboard(w http.ResponseWriter, r *http.Request) {
 // --- Performance ---
 
 func (h *Handler) Performance(w http.ResponseWriter, r *http.Request) {
-	stats, err := h.db.GetPerformanceStats(r.Context())
+	projectID, _ := strconv.ParseInt(r.URL.Query().Get("project"), 10, 64)
+	stats, err := h.db.GetPerformanceStats(r.Context(), projectID)
 	if err != nil {
 		serverError(w, err)
 		return
