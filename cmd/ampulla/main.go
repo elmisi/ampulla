@@ -17,6 +17,7 @@ import (
 	"github.com/elmisi/ampulla/internal/config"
 	"github.com/elmisi/ampulla/internal/event"
 	"github.com/elmisi/ampulla/internal/store"
+	"github.com/getsentry/sentry-go"
 	"github.com/go-chi/chi/v5"
 	"github.com/go-chi/chi/v5/middleware"
 )
@@ -29,6 +30,19 @@ func main() {
 	}
 
 	setupLogger(cfg.LogLevel)
+
+	if dsn := os.Getenv("SENTRY_DSN"); dsn != "" {
+		if err := sentry.Init(sentry.ClientOptions{
+			Dsn:              dsn,
+			Environment:      os.Getenv("SENTRY_ENVIRONMENT"),
+			TracesSampleRate: 0.1,
+		}); err != nil {
+			slog.Warn("sentry init failed", "error", err)
+		} else {
+			defer sentry.Flush(2 * time.Second)
+			slog.Info("sentry enabled")
+		}
+	}
 
 	ctx := context.Background()
 
