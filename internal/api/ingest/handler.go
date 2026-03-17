@@ -1,7 +1,10 @@
 package ingest
 
 import (
+	"compress/flate"
+	"compress/gzip"
 	"encoding/json"
+	"io"
 	"log/slog"
 	"net/http"
 	"strconv"
@@ -37,7 +40,15 @@ func (h *Handler) Envelope(w http.ResponseWriter, r *http.Request) {
 
 	r.Body = http.MaxBytesReader(w, r.Body, 1<<20) // 1 MB limit
 
-	env, err := envelope.Parse(r.Body)
+	body, err := maybeDecompress(r)
+	if err != nil {
+		slog.Warn("decompress error", "project", project.ID, "error", err)
+		http.Error(w, `{"error":"decompression failed"}`, http.StatusBadRequest)
+		return
+	}
+	defer body.Close()
+
+	env, err := envelope.Parse(body)
 	if err != nil {
 		slog.Warn("envelope parse error", "project", project.ID, "error", err)
 		http.Error(w, `{"error":"invalid envelope"}`, http.StatusBadRequest)
@@ -68,7 +79,15 @@ func (h *Handler) Store(w http.ResponseWriter, r *http.Request) {
 
 	r.Body = http.MaxBytesReader(w, r.Body, 1<<20) // 1 MB limit
 
-	env, err := envelope.ParseStoreRequest(r.Body)
+	body, err := maybeDecompress(r)
+	if err != nil {
+		slog.Warn("decompress error", "project", project.ID, "error", err)
+		http.Error(w, `{"error":"decompression failed"}`, http.StatusBadRequest)
+		return
+	}
+	defer body.Close()
+
+	env, err := envelope.ParseStoreRequest(body)
 	if err != nil {
 		slog.Warn("store parse error", "project", project.ID, "error", err)
 		http.Error(w, `{"error":"invalid event"}`, http.StatusBadRequest)
@@ -80,4 +99,16 @@ func (h *Handler) Store(w http.ResponseWriter, r *http.Request) {
 	w.Header().Set("Content-Type", "application/json")
 	w.WriteHeader(http.StatusOK)
 	json.NewEncoder(w).Encode(map[string]string{"id": env.Header.EventID})
+}
+
+// maybeDecompress returns the appropriate decompressing reader based on Content-Encoding.
+func maybeDecompress(r *http.Request) (io.ReadCloser, error) {
+	switch r.Header.Get("Content-Encoding") {
+	case "gzip":
+		return gzip.NewReader(r.Body)
+	case "deflate":
+		return flate.NewReader(r.Body), nil
+	default:
+		return r.Body, nil
+	}
 }
