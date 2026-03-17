@@ -3,6 +3,7 @@ package admin
 import (
 	"encoding/json"
 	"fmt"
+	"log/slog"
 	"net/http"
 	"strconv"
 
@@ -389,6 +390,7 @@ func writeJSON(w http.ResponseWriter, status int, v any) {
 	json.NewEncoder(w).Encode(v)
 }
 
-func serverError(w http.ResponseWriter, _ error) {
+func serverError(w http.ResponseWriter, err error) {
+	slog.Error("admin API error", "error", err)
 	http.Error(w, `{"error":"internal server error"}`, http.StatusInternalServerError)
 }
