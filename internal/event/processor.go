@@ -120,16 +120,14 @@ func (p *Processor) sendNtfy(projectID int64, result *UpsertResult) {
 	}
 
 	issue := result.Issue
-	var tag, title string
+	var kind string
 	if result.IsNew {
-		tag = "rotating_light"
-		title = fmt.Sprintf("[%s] %s: %s", projectName, issue.Level, issue.Title)
+		kind = "New"
 	} else {
-		tag = "rewind"
-		title = fmt.Sprintf("[%s] regression: %s", projectName, issue.Title)
+		kind = "Regression"
 	}
-
-	body := fmt.Sprintf("Events: %d\nFirst seen: %s", issue.EventCount, issue.FirstSeen.Format("2006-01-02 15:04"))
+	title := fmt.Sprintf("[%s] %s", projectName, issue.Title)
+	body := kind
 
 	url := fmt.Sprintf("%s/%s", strings.TrimRight(ntfyURL, "/"), ntfyTopic)
 	req, err := http.NewRequestWithContext(ctx, "POST", url, strings.NewReader(body))
@@ -138,7 +136,7 @@ func (p *Processor) sendNtfy(projectID int64, result *UpsertResult) {
 		return
 	}
 	req.Header.Set("Title", title)
-	req.Header.Set("Tags", tag)
+	req.Header.Set("Tags", kind)
 	req.Header.Set("Priority", "default")
 	if ntfyToken != "" {
 		req.Header.Set("Authorization", "Bearer "+ntfyToken)
