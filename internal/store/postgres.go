@@ -133,16 +133,27 @@ func (db *DB) InsertTransaction(ctx context.Context, t *event.Transaction) (int6
 	return id, nil
 }
 
-// InsertSpans stores spans belonging to a transaction.
+// InsertSpans stores spans belonging to a transaction using a batch insert.
 func (db *DB) InsertSpans(ctx context.Context, txnID int64, traceID uuid.UUID, spans []event.Span) error {
-	for _, s := range spans {
-		_, err := db.pool.Exec(ctx, `
-			INSERT INTO spans (transaction_id, trace_id, span_id, parent_span_id, op, description, duration_ms, status, timestamp, data)
-			VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10)
-		`, txnID, traceID, s.SpanID, s.ParentSpanID, s.Op, s.Description, s.DurationMs, s.Status, s.Timestamp, s.Data)
-		if err != nil {
-			return fmt.Errorf("insert span: %w", err)
+	if len(spans) == 0 {
+		return nil
+	}
+
+	query := "INSERT INTO spans (transaction_id, trace_id, span_id, parent_span_id, op, description, duration_ms, status, timestamp, data) VALUES "
+	args := make([]any, 0, len(spans)*10)
+	for i, s := range spans {
+		if i > 0 {
+			query += ", "
 		}
+		base := i * 10
+		query += fmt.Sprintf("($%d, $%d, $%d, $%d, $%d, $%d, $%d, $%d, $%d, $%d)",
+			base+1, base+2, base+3, base+4, base+5, base+6, base+7, base+8, base+9, base+10)
+		args = append(args, txnID, traceID, s.SpanID, s.ParentSpanID, s.Op, s.Description, s.DurationMs, s.Status, s.Timestamp, s.Data)
+	}
+
+	_, err := db.pool.Exec(ctx, query, args...)
+	if err != nil {
+		return fmt.Errorf("insert spans: %w", err)
 	}
 	return nil
 }
