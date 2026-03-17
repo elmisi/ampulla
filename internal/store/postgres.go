@@ -606,7 +606,7 @@ func (db *DB) GetPerformanceStats(ctx context.Context, projectID int64, days int
 				round(percentile_cont(0.95) WITHIN GROUP (ORDER BY duration_ms)::numeric, 1),
 				round(percentile_cont(0.99) WITHIN GROUP (ORDER BY duration_ms)::numeric, 1)
 			FROM transactions
-			WHERE timestamp > now() - make_interval(days := $1) AND project_id = $2
+			WHERE timestamp > now() - ($1 || ' days')::interval AND project_id = $2
 			GROUP BY name, op
 			ORDER BY cnt DESC
 			LIMIT 20`
@@ -621,7 +621,7 @@ func (db *DB) GetPerformanceStats(ctx context.Context, projectID int64, days int
 				round(percentile_cont(0.95) WITHIN GROUP (ORDER BY duration_ms)::numeric, 1),
 				round(percentile_cont(0.99) WITHIN GROUP (ORDER BY duration_ms)::numeric, 1)
 			FROM transactions
-			WHERE timestamp > now() - make_interval(days := $1)
+			WHERE timestamp > now() - ($1 || ' days')::interval
 			GROUP BY name, op
 			ORDER BY cnt DESC
 			LIMIT 20`
