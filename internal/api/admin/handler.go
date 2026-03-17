@@ -365,6 +365,17 @@ func (h *Handler) Dashboard(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, http.StatusOK, stats)
 }
 
+// --- Performance ---
+
+func (h *Handler) Performance(w http.ResponseWriter, r *http.Request) {
+	stats, err := h.db.GetPerformanceStats(r.Context())
+	if err != nil {
+		serverError(w, err)
+		return
+	}
+	writeJSON(w, http.StatusOK, stats)
+}
+
 // --- Helpers ---
 
 func paramInt64(r *http.Request, name string) (int64, error) {

@@ -86,6 +86,25 @@ type Span struct {
 	Data          json.RawMessage `json:"data,omitempty"`
 }
 
+// Performance analytics types
+
+type EndpointStats struct {
+	Name  string  `json:"name"`
+	Op    string  `json:"op"`
+	Count int64   `json:"count"`
+	AvgMs float64 `json:"avgMs"`
+	P50   float64 `json:"p50"`
+	P75   float64 `json:"p75"`
+	P95   float64 `json:"p95"`
+	P99   float64 `json:"p99"`
+}
+
+type PerformanceStats struct {
+	Endpoints       []EndpointStats `json:"endpoints"`
+	TotalCount      int64           `json:"totalCount"`
+	OldestTimestamp *time.Time      `json:"oldestTransaction"`
+}
+
 // Envelope represents a parsed Sentry envelope
 type Envelope struct {
 	Header EnvelopeHeader

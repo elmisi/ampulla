@@ -128,6 +128,7 @@ func main() {
 				r.Get("/issues/{id}/events", adminHandler.ListIssueEvents)
 
 				r.Get("/transactions", adminHandler.ListTransactions)
+				r.Get("/performance", adminHandler.Performance)
 			})
 		})
 		slog.Info("admin UI enabled", "path", "/admin/")

@@ -561,6 +561,47 @@ func (db *DB) DashboardStats(ctx context.Context) (map[string]int64, error) {
 	return stats, nil
 }
 
+// GetPerformanceStats returns endpoint performance percentiles for the last 7 days.
+func (db *DB) GetPerformanceStats(ctx context.Context) (*event.PerformanceStats, error) {
+	stats := &event.PerformanceStats{}
+
+	// Total count and oldest transaction
+	err := db.pool.QueryRow(ctx, `SELECT COUNT(*), MIN(timestamp) FROM transactions`).Scan(&stats.TotalCount, &stats.OldestTimestamp)
+	if err != nil {
+		return nil, fmt.Errorf("performance total: %w", err)
+	}
+
+	// Per-endpoint percentiles (last 7 days)
+	rows, err := db.pool.Query(ctx, `
+		SELECT
+			name, op, count(*) as cnt,
+			round(avg(duration_ms)::numeric, 1),
+			round(percentile_cont(0.50) WITHIN GROUP (ORDER BY duration_ms)::numeric, 1),
+			round(percentile_cont(0.75) WITHIN GROUP (ORDER BY duration_ms)::numeric, 1),
+			round(percentile_cont(0.95) WITHIN GROUP (ORDER BY duration_ms)::numeric, 1),
+			round(percentile_cont(0.99) WITHIN GROUP (ORDER BY duration_ms)::numeric, 1)
+		FROM transactions
+		WHERE timestamp > now() - interval '7 days'
+		GROUP BY name, op
+		ORDER BY cnt DESC
+		LIMIT 20
+	`)
+	if err != nil {
+		return nil, fmt.Errorf("performance endpoints: %w", err)
+	}
+	defer rows.Close()
+
+	for rows.Next() {
+		var e event.EndpointStats
+		if err := rows.Scan(&e.Name, &e.Op, &e.Count, &e.AvgMs, &e.P50, &e.P75, &e.P95, &e.P99); err != nil {
+			return nil, err
+		}
+		stats.Endpoints = append(stats.Endpoints, e)
+	}
+
+	return stats, nil
+}
+
 // DeleteOldTransactions removes transactions (and their spans via CASCADE) older than before.
 func (db *DB) DeleteOldTransactions(ctx context.Context, before time.Time) (int64, error) {
 	tag, err := db.pool.Exec(ctx, `DELETE FROM transactions WHERE timestamp < $1`, before)
