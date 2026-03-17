@@ -127,7 +127,7 @@ func (p *Processor) sendNtfy(projectID int64, result *UpsertResult) {
 		kind = "Regression"
 	}
 	title := fmt.Sprintf("[%s] %s", projectName, issue.Title)
-	body := kind
+	body := fmt.Sprintf("%s\nFirst seen: %s", kind, issue.FirstSeen.Format("2006-01-02 15:04"))
 
 	url := fmt.Sprintf("%s/%s", strings.TrimRight(ntfyURL, "/"), ntfyTopic)
 	req, err := http.NewRequestWithContext(ctx, "POST", url, strings.NewReader(body))
@@ -136,7 +136,6 @@ func (p *Processor) sendNtfy(projectID int64, result *UpsertResult) {
 		return
 	}
 	req.Header.Set("Title", title)
-	req.Header.Set("Tags", kind)
 	req.Header.Set("Priority", "default")
 	if ntfyToken != "" {
 		req.Header.Set("Authorization", "Bearer "+ntfyToken)
