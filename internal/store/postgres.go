@@ -561,6 +561,15 @@ func (db *DB) DashboardStats(ctx context.Context) (map[string]int64, error) {
 	return stats, nil
 }
 
+// DeleteOldTransactions removes transactions (and their spans via CASCADE) older than before.
+func (db *DB) DeleteOldTransactions(ctx context.Context, before time.Time) (int64, error) {
+	tag, err := db.pool.Exec(ctx, `DELETE FROM transactions WHERE timestamp < $1`, before)
+	if err != nil {
+		return 0, fmt.Errorf("delete old transactions: %w", err)
+	}
+	return tag.RowsAffected(), nil
+}
+
 func generateKey() string {
 	return strings.ReplaceAll(uuid.New().String(), "-", "")
 }

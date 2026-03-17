@@ -13,8 +13,10 @@ import (
 )
 
 const (
-	workerCount = 4
-	queueSize   = 1000
+	workerCount      = 4
+	queueSize        = 1000
+	cleanupInterval  = 1 * time.Hour
+	retentionPeriod  = 30 * 24 * time.Hour // 30 days
 )
 
 // Store defines the database operations needed by the processor.
@@ -23,6 +25,7 @@ type Store interface {
 	InsertEvent(ctx context.Context, e *Event) error
 	InsertTransaction(ctx context.Context, t *Transaction) (int64, error)
 	InsertSpans(ctx context.Context, txnID int64, traceID uuid.UUID, spans []Span) error
+	DeleteOldTransactions(ctx context.Context, before time.Time) (int64, error)
 }
 
 type job struct {
@@ -31,20 +34,26 @@ type job struct {
 }
 
 type Processor struct {
-	store Store
-	queue chan job
-	wg    sync.WaitGroup
+	store  Store
+	queue  chan job
+	wg     sync.WaitGroup
+	done   chan struct{}
+	ticker *time.Ticker
 }
 
 func NewProcessor(s Store) *Processor {
 	p := &Processor{
-		store: s,
-		queue: make(chan job, queueSize),
+		store:  s,
+		queue:  make(chan job, queueSize),
+		done:   make(chan struct{}),
+		ticker: time.NewTicker(cleanupInterval),
 	}
 	for i := 0; i < workerCount; i++ {
 		p.wg.Add(1)
 		go p.worker()
 	}
+	p.wg.Add(1)
+	go p.cleanupLoop()
 	return p
 }
 
@@ -64,10 +73,38 @@ func (p *Processor) Enqueue(projectID int64, env *Envelope) {
 	}
 }
 
-// Close shuts down the worker pool and waits for in-flight jobs to complete.
+// Close shuts down the worker pool and cleanup loop, waits for completion.
 func (p *Processor) Close() {
+	p.ticker.Stop()
+	close(p.done)
 	close(p.queue)
 	p.wg.Wait()
+}
+
+func (p *Processor) cleanupLoop() {
+	defer p.wg.Done()
+	// Run once at startup
+	p.runCleanup()
+	for {
+		select {
+		case <-p.ticker.C:
+			p.runCleanup()
+		case <-p.done:
+			return
+		}
+	}
+}
+
+func (p *Processor) runCleanup() {
+	before := time.Now().Add(-retentionPeriod)
+	deleted, err := p.store.DeleteOldTransactions(context.Background(), before)
+	if err != nil {
+		slog.Error("transaction cleanup failed", "error", err)
+		return
+	}
+	if deleted > 0 {
+		slog.Info("transaction cleanup", "deleted", deleted, "older_than", before.Format(time.RFC3339))
+	}
 }
 
 // Process handles all items in an envelope for the given project.
