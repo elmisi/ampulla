@@ -28,7 +28,7 @@ type Store interface {
 	InsertTransaction(ctx context.Context, t *Transaction) (int64, error)
 	InsertSpans(ctx context.Context, txnID int64, traceID uuid.UUID, spans []Span) error
 	DeleteOldTransactions(ctx context.Context, before time.Time) (int64, error)
-	GetProjectNtfyConfig(ctx context.Context, projectID int64) (ntfyURL, ntfyTopic, ntfyToken string, err error)
+	GetProjectNtfyConfig(ctx context.Context, projectID int64) (projectName, ntfyURL, ntfyTopic, ntfyToken string, err error)
 }
 
 type job struct {
@@ -114,7 +114,7 @@ func (p *Processor) sendNtfy(projectID int64, result *UpsertResult) {
 	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
 	defer cancel()
 
-	ntfyURL, ntfyTopic, ntfyToken, err := p.store.GetProjectNtfyConfig(ctx, projectID)
+	projectName, ntfyURL, ntfyTopic, ntfyToken, err := p.store.GetProjectNtfyConfig(ctx, projectID)
 	if err != nil || ntfyURL == "" || ntfyTopic == "" {
 		return // ntfy not configured for this project
 	}
@@ -123,10 +123,10 @@ func (p *Processor) sendNtfy(projectID int64, result *UpsertResult) {
 	var tag, title string
 	if result.IsNew {
 		tag = "rotating_light"
-		title = fmt.Sprintf("[%s] New: %s", issue.Level, issue.Title)
+		title = fmt.Sprintf("[%s] %s: %s", projectName, issue.Level, issue.Title)
 	} else {
 		tag = "rewind"
-		title = fmt.Sprintf("[%s] Regression: %s", issue.Level, issue.Title)
+		title = fmt.Sprintf("[%s] regression: %s", projectName, issue.Title)
 	}
 
 	body := fmt.Sprintf("Events: %d\nFirst seen: %s", issue.EventCount, issue.FirstSeen.Format("2006-01-02 15:04"))

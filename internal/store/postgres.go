@@ -639,6 +639,7 @@ func (db *DB) GetPerformanceStats(ctx context.Context, projectID int64, days int
 	}
 
 	// Per-endpoint percentiles
+	interval := fmt.Sprintf("%d days", days)
 	var query string
 	var args []any
 	if projectID > 0 {
@@ -651,11 +652,11 @@ func (db *DB) GetPerformanceStats(ctx context.Context, projectID int64, days int
 				round(percentile_cont(0.95) WITHIN GROUP (ORDER BY duration_ms)::numeric, 1),
 				round(percentile_cont(0.99) WITHIN GROUP (ORDER BY duration_ms)::numeric, 1)
 			FROM transactions
-			WHERE timestamp > now() - ($1 || ' days')::interval AND project_id = $2
+			WHERE timestamp > now() - $1::interval AND project_id = $2
 			GROUP BY name, op
 			ORDER BY cnt DESC
 			LIMIT 20`
-		args = []any{days, projectID}
+		args = []any{interval, projectID}
 	} else {
 		query = `
 			SELECT
@@ -666,11 +667,11 @@ func (db *DB) GetPerformanceStats(ctx context.Context, projectID int64, days int
 				round(percentile_cont(0.95) WITHIN GROUP (ORDER BY duration_ms)::numeric, 1),
 				round(percentile_cont(0.99) WITHIN GROUP (ORDER BY duration_ms)::numeric, 1)
 			FROM transactions
-			WHERE timestamp > now() - ($1 || ' days')::interval
+			WHERE timestamp > now() - $1::interval
 			GROUP BY name, op
 			ORDER BY cnt DESC
 			LIMIT 20`
-		args = []any{days}
+		args = []any{interval}
 	}
 
 	rows, err := db.pool.Query(ctx, query, args...)
@@ -690,12 +691,12 @@ func (db *DB) GetPerformanceStats(ctx context.Context, projectID int64, days int
 	return stats, nil
 }
 
-// GetProjectNtfyConfig returns the ntfy notification config for a project.
-func (db *DB) GetProjectNtfyConfig(ctx context.Context, projectID int64) (ntfyURL, ntfyTopic, ntfyToken string, err error) {
+// GetProjectNtfyConfig returns the ntfy notification config and name for a project.
+func (db *DB) GetProjectNtfyConfig(ctx context.Context, projectID int64) (projectName, ntfyURL, ntfyTopic, ntfyToken string, err error) {
 	var url, topic, token *string
-	err = db.pool.QueryRow(ctx, `SELECT ntfy_url, ntfy_topic, ntfy_token FROM projects WHERE id = $1`, projectID).Scan(&url, &topic, &token)
+	err = db.pool.QueryRow(ctx, `SELECT name, ntfy_url, ntfy_topic, ntfy_token FROM projects WHERE id = $1`, projectID).Scan(&projectName, &url, &topic, &token)
 	if err != nil {
-		return "", "", "", err
+		return "", "", "", "", err
 	}
 	if url != nil {
 		ntfyURL = *url
