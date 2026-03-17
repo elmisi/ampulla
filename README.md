@@ -8,7 +8,8 @@ Built with Go and PostgreSQL. No external dependencies, no queue, no workers —
 
 - **Sentry SDK compatible** — drop-in DSN replacement, SDKs send events as usual
 - **Error tracking** — exceptions grouped by fingerprint, with full event payloads stored as JSONB
-- **Performance monitoring** — transactions and spans ingestion
+- **Performance monitoring** — transactions and spans ingestion, with latency percentiles (P50/P75/P95/P99)
+- **Retention policy** — automatic cleanup of transactions older than 30 days
 - **Admin UI** — dark monospace dashboard at `/admin/` for managing organizations, projects, DSN keys, and browsing issues
 - **Session auth** — HMAC-SHA256 signed cookies, credentials from environment variables
 
@@ -65,6 +66,19 @@ internal/
 ```
 
 Synchronous processing, no queue — designed for low-to-medium volume (1k-5k events/month).
+
+## Performance Percentiles
+
+The Performance page in the admin UI shows latency percentiles for each endpoint over the last 7 days:
+
+| Metric | Meaning |
+|--------|---------|
+| **P50** | Median — 50% of requests complete within this time. The "typical" experience. |
+| **P75** | 75th percentile — 25% of requests are slower than this. Shows where slowdowns begin. |
+| **P95** | 95th percentile — only 5% of requests are slower. The standard metric for SLAs. |
+| **P99** | 99th percentile — only 1% is slower. Captures outliers and worst-case latency. |
+
+Values above 1s are highlighted in red, above 500ms in yellow.
 
 ## API
 
