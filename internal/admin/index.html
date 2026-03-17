@@ -665,30 +665,49 @@ router.on('/issues/:id', async (params) => {
 router.on('/transactions', async () => {
   const frag = el('div');
   frag.appendChild(el('h1', null, 'Transactions'));
-  try {
-    const txns = await api.get('/transactions');
-    if (!txns || txns.length === 0) {
-      frag.appendChild(el('div', { className: 'empty' }, 'No transactions'));
-    } else {
-      const t = el('table');
-      t.appendChild(el('thead', null, el('tr', null,
-        el('th', null, 'Transaction'), el('th', null, 'Op'), el('th', null, 'Duration'),
-        el('th', null, 'Status'), el('th', null, 'Time')
-      )));
-      const tb = el('tbody');
-      txns.forEach(tx => {
-        tb.appendChild(el('tr', null,
-          el('td', null, tx.transaction || tx.name || '-'),
-          el('td', { style: 'color:var(--muted)' }, tx.op || '-'),
-          el('td', null, tx.duration ? tx.duration.toFixed(1) + 'ms' : '-'),
-          el('td', null, statusBadge(tx.status || 'ok')),
-          el('td', { style: 'color:var(--muted)' }, timeAgo(tx.startTimestamp))
-        ));
-      });
-      t.appendChild(tb);
-      frag.appendChild(el('div', { className: 'card', style: 'padding:0;overflow:auto' }, t));
-    }
-  } catch (err) { toast(err.message, 'error'); }
+  const toolbar = el('div', { className: 'toolbar' });
+  let projects = [];
+  try { projects = await api.get('/projects'); } catch {}
+  const sel = el('select');
+  sel.appendChild(el('option', { value: '' }, 'All projects'));
+  projects.forEach(p => sel.appendChild(el('option', { value: String(p.id) }, p.name)));
+  sel.onchange = () => loadTxns();
+  toolbar.appendChild(sel);
+  frag.appendChild(toolbar);
+
+  const container = el('div');
+  frag.appendChild(container);
+
+  async function loadTxns() {
+    container.innerHTML = '';
+    try {
+      const q = sel.value ? '?project=' + sel.value : '';
+      const txns = await api.get('/transactions' + q);
+      if (!txns || txns.length === 0) {
+        container.appendChild(el('div', { className: 'empty' }, 'No transactions'));
+      } else {
+        const t = el('table');
+        t.appendChild(el('thead', null, el('tr', null,
+          el('th', null, 'Transaction'), el('th', null, 'Op'), el('th', null, 'Duration'),
+          el('th', null, 'Status'), el('th', null, 'Time')
+        )));
+        const tb = el('tbody');
+        txns.forEach(tx => {
+          tb.appendChild(el('tr', null,
+            el('td', null, tx.transaction || tx.name || '-'),
+            el('td', { style: 'color:var(--muted)' }, tx.op || '-'),
+            el('td', null, tx.duration ? tx.duration.toFixed(1) + 'ms' : '-'),
+            el('td', null, statusBadge(tx.status || 'ok')),
+            el('td', { style: 'color:var(--muted)' }, timeAgo(tx.startTimestamp))
+          ));
+        });
+        t.appendChild(tb);
+        container.appendChild(el('div', { className: 'card', style: 'padding:0;overflow:auto' }, t));
+      }
+    } catch (err) { toast(err.message, 'error'); }
+  }
+
+  await loadTxns();
   render(frag);
 });
 
@@ -704,6 +723,14 @@ router.on('/performance', async () => {
   projects.forEach(p => sel.appendChild(el('option', { value: String(p.id) }, p.name)));
   sel.onchange = () => loadPerf();
   toolbar.appendChild(sel);
+  const timeSel = el('select');
+  [{ v: '1', l: 'Last 24 hours' }, { v: '7', l: 'Last 7 days' }, { v: '30', l: 'Last 30 days' }].forEach(o => {
+    const opt = el('option', { value: o.v }, o.l);
+    if (o.v === '7') opt.selected = true;
+    timeSel.appendChild(opt);
+  });
+  timeSel.onchange = () => loadPerf();
+  toolbar.appendChild(timeSel);
   frag.appendChild(toolbar);
 
   const container = el('div');
@@ -712,8 +739,10 @@ router.on('/performance', async () => {
   async function loadPerf() {
     container.innerHTML = '';
     try {
-      const q = sel.value ? '?project=' + sel.value : '';
-      const data = await api.get('/performance' + q);
+      const params = [];
+      if (sel.value) params.push('project=' + sel.value);
+      params.push('days=' + timeSel.value);
+      const data = await api.get('/performance?' + params.join('&'));
 
       // Summary cards
       const cards = el('div', { className: 'cards' });
@@ -730,7 +759,8 @@ router.on('/performance', async () => {
       container.appendChild(cards);
 
       // Endpoints table
-      container.appendChild(el('h2', { style: 'margin-top:24px' }, 'Endpoints (last 7 days)'));
+      const label = timeSel.options[timeSel.selectedIndex].text.toLowerCase();
+      container.appendChild(el('h2', { style: 'margin-top:24px' }, 'Endpoints (' + label + ')'));
       if (!data.endpoints || data.endpoints.length === 0) {
         container.appendChild(el('div', { className: 'empty' }, 'No transaction data'));
       } else {

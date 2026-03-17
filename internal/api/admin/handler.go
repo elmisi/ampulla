@@ -345,8 +345,9 @@ func (h *Handler) ListIssueEvents(w http.ResponseWriter, r *http.Request) {
 // --- Transactions ---
 
 func (h *Handler) ListTransactions(w http.ResponseWriter, r *http.Request) {
+	projectID, _ := strconv.ParseInt(r.URL.Query().Get("project"), 10, 64)
 	cursor, limit := parsePagination(r)
-	txns, err := h.db.AdminListTransactions(r.Context(), cursor, limit)
+	txns, err := h.db.AdminListTransactions(r.Context(), projectID, cursor, limit)
 	if err != nil {
 		serverError(w, err)
 		return
@@ -369,7 +370,11 @@ func (h *Handler) Dashboard(w http.ResponseWriter, r *http.Request) {
 
 func (h *Handler) Performance(w http.ResponseWriter, r *http.Request) {
 	projectID, _ := strconv.ParseInt(r.URL.Query().Get("project"), 10, 64)
-	stats, err := h.db.GetPerformanceStats(r.Context(), projectID)
+	days, _ := strconv.Atoi(r.URL.Query().Get("days"))
+	if days <= 0 || days > 90 {
+		days = 7
+	}
+	stats, err := h.db.GetPerformanceStats(r.Context(), projectID, days)
 	if err != nil {
 		serverError(w, err)
 		return

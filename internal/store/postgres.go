@@ -502,19 +502,33 @@ func (db *DB) DeleteIssue(ctx context.Context, id int64) error {
 	return err
 }
 
-// AdminListTransactions returns all transactions.
-func (db *DB) AdminListTransactions(ctx context.Context, cursor int64, limit int) ([]event.Transaction, error) {
+// AdminListTransactions returns transactions, optionally filtered by project ID.
+func (db *DB) AdminListTransactions(ctx context.Context, projectID, cursor int64, limit int) ([]event.Transaction, error) {
 	if limit <= 0 || limit > 100 {
 		limit = 25
 	}
-	rows, err := db.pool.Query(ctx, `
-		SELECT id, event_id, project_id, trace_id, span_id, op, name,
-		       duration_ms, status, timestamp, data, received_at
-		FROM transactions
-		WHERE id > $1
-		ORDER BY timestamp DESC
-		LIMIT $2
-	`, cursor, limit)
+	var query string
+	var args []any
+	if projectID > 0 {
+		query = `
+			SELECT id, event_id, project_id, trace_id, span_id, op, name,
+			       duration_ms, status, timestamp, data, received_at
+			FROM transactions
+			WHERE project_id = $1 AND id > $2
+			ORDER BY timestamp DESC
+			LIMIT $3`
+		args = []any{projectID, cursor, limit}
+	} else {
+		query = `
+			SELECT id, event_id, project_id, trace_id, span_id, op, name,
+			       duration_ms, status, timestamp, data, received_at
+			FROM transactions
+			WHERE id > $1
+			ORDER BY timestamp DESC
+			LIMIT $2`
+		args = []any{cursor, limit}
+	}
+	rows, err := db.pool.Query(ctx, query, args...)
 	if err != nil {
 		return nil, err
 	}
@@ -561,9 +575,9 @@ func (db *DB) DashboardStats(ctx context.Context) (map[string]int64, error) {
 	return stats, nil
 }
 
-// GetPerformanceStats returns endpoint performance percentiles for the last 7 days.
-// If projectID > 0, filters by project.
-func (db *DB) GetPerformanceStats(ctx context.Context, projectID int64) (*event.PerformanceStats, error) {
+// GetPerformanceStats returns endpoint performance percentiles.
+// If projectID > 0, filters by project. days controls the time window.
+func (db *DB) GetPerformanceStats(ctx context.Context, projectID int64, days int) (*event.PerformanceStats, error) {
 	stats := &event.PerformanceStats{}
 
 	// Total count and oldest transaction
@@ -579,7 +593,7 @@ func (db *DB) GetPerformanceStats(ctx context.Context, projectID int64) (*event.
 		}
 	}
 
-	// Per-endpoint percentiles (last 7 days)
+	// Per-endpoint percentiles
 	var query string
 	var args []any
 	if projectID > 0 {
@@ -592,11 +606,11 @@ func (db *DB) GetPerformanceStats(ctx context.Context, projectID int64) (*event.
 				round(percentile_cont(0.95) WITHIN GROUP (ORDER BY duration_ms)::numeric, 1),
 				round(percentile_cont(0.99) WITHIN GROUP (ORDER BY duration_ms)::numeric, 1)
 			FROM transactions
-			WHERE timestamp > now() - interval '7 days' AND project_id = $1
+			WHERE timestamp > now() - make_interval(days := $1) AND project_id = $2
 			GROUP BY name, op
 			ORDER BY cnt DESC
 			LIMIT 20`
-		args = []any{projectID}
+		args = []any{days, projectID}
 	} else {
 		query = `
 			SELECT
@@ -607,10 +621,11 @@ func (db *DB) GetPerformanceStats(ctx context.Context, projectID int64) (*event.
 				round(percentile_cont(0.95) WITHIN GROUP (ORDER BY duration_ms)::numeric, 1),
 				round(percentile_cont(0.99) WITHIN GROUP (ORDER BY duration_ms)::numeric, 1)
 			FROM transactions
-			WHERE timestamp > now() - interval '7 days'
+			WHERE timestamp > now() - make_interval(days := $1)
 			GROUP BY name, op
 			ORDER BY cnt DESC
 			LIMIT 20`
+		args = []any{days}
 	}
 
 	rows, err := db.pool.Query(ctx, query, args...)
