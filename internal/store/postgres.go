@@ -119,6 +119,7 @@ func (db *DB) InsertEvent(ctx context.Context, e *event.Event) error {
 }
 
 // InsertTransaction stores a performance transaction and returns its database ID.
+// Returns (0, nil) if the transaction already exists (duplicate event_id).
 func (db *DB) InsertTransaction(ctx context.Context, t *event.Transaction) (int64, error) {
 	var id int64
 	err := db.pool.QueryRow(ctx, `
@@ -128,6 +129,9 @@ func (db *DB) InsertTransaction(ctx context.Context, t *event.Transaction) (int6
 		RETURNING id
 	`, t.EventID, t.ProjectID, t.TraceID, t.SpanID, t.Op, t.Name, t.DurationMs, t.Status, t.Timestamp, t.Data).Scan(&id)
 	if err != nil {
+		if err.Error() == "no rows in result set" {
+			return 0, nil // duplicate, skip
+		}
 		return 0, fmt.Errorf("insert transaction: %w", err)
 	}
 	return id, nil

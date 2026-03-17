@@ -141,14 +141,14 @@ func (p *Processor) processEvent(ctx context.Context, projectID int64, payload j
 
 func (p *Processor) processTransaction(ctx context.Context, projectID int64, payload json.RawMessage) error {
 	var raw struct {
-		EventID        string  `json:"event_id"`
-		Transaction    string  `json:"transaction"`
-		Op             string  `json:"op"`
-		TraceID        string  `json:"trace_id"`
-		SpanID         string  `json:"span_id"`
-		Status         string  `json:"status"`
-		StartTimestamp float64 `json:"start_timestamp"`
-		Timestamp      float64 `json:"timestamp"`
+		EventID        string `json:"event_id"`
+		Transaction    string `json:"transaction"`
+		Op             string `json:"op"`
+		TraceID        string `json:"trace_id"`
+		SpanID         string `json:"span_id"`
+		Status         string `json:"status"`
+		StartTimestamp any    `json:"start_timestamp"`
+		Timestamp      any    `json:"timestamp"`
 		Contexts       struct {
 			Trace struct {
 				TraceID string `json:"trace_id"`
@@ -158,13 +158,13 @@ func (p *Processor) processTransaction(ctx context.Context, projectID int64, pay
 			} `json:"trace"`
 		} `json:"contexts"`
 		Spans []struct {
-			SpanID         string  `json:"span_id"`
-			ParentSpanID   string  `json:"parent_span_id"`
-			Op             string  `json:"op"`
-			Description    string  `json:"description"`
-			Status         string  `json:"status"`
-			StartTimestamp float64 `json:"start_timestamp"`
-			Timestamp      float64 `json:"timestamp"`
+			SpanID         string          `json:"span_id"`
+			ParentSpanID   string          `json:"parent_span_id"`
+			Op             string          `json:"op"`
+			Description    string          `json:"description"`
+			Status         string          `json:"status"`
+			StartTimestamp any             `json:"start_timestamp"`
+			Timestamp      any             `json:"timestamp"`
 			Data           json.RawMessage `json:"data"`
 		} `json:"spans"`
 	}
@@ -202,8 +202,8 @@ func (p *Processor) processTransaction(ctx context.Context, projectID int64, pay
 		status = raw.Contexts.Trace.Status
 	}
 
-	startTS := time.Unix(int64(raw.StartTimestamp), int64((raw.StartTimestamp-float64(int64(raw.StartTimestamp)))*1e9))
-	endTS := time.Unix(int64(raw.Timestamp), int64((raw.Timestamp-float64(int64(raw.Timestamp)))*1e9))
+	startTS := parseTimestamp(raw.StartTimestamp)
+	endTS := parseTimestamp(raw.Timestamp)
 	durationMs := float64(endTS.Sub(startTS).Milliseconds())
 
 	txn := &Transaction{
@@ -223,6 +223,9 @@ func (p *Processor) processTransaction(ctx context.Context, projectID int64, pay
 	if err != nil {
 		return err
 	}
+	if txnID == 0 {
+		return nil // duplicate transaction, skip spans
+	}
 
 	if len(raw.Spans) == 0 {
 		return nil
@@ -230,8 +233,8 @@ func (p *Processor) processTransaction(ctx context.Context, projectID int64, pay
 
 	spans := make([]Span, 0, len(raw.Spans))
 	for _, s := range raw.Spans {
-		sStartTS := time.Unix(int64(s.StartTimestamp), int64((s.StartTimestamp-float64(int64(s.StartTimestamp)))*1e9))
-		sEndTS := time.Unix(int64(s.Timestamp), int64((s.Timestamp-float64(int64(s.Timestamp)))*1e9))
+		sStartTS := parseTimestamp(s.StartTimestamp)
+		sEndTS := parseTimestamp(s.Timestamp)
 		sDuration := float64(sEndTS.Sub(sStartTS).Milliseconds())
 
 		spans = append(spans, Span{
