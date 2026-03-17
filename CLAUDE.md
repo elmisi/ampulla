@@ -36,40 +36,54 @@ cd ../traefik.services && ./deploy.sh ampulla
 
 1. Sentry SDK sends event to `POST /api/{projectID}/envelope/` (or `/store/`)
 2. `auth.Middleware` extracts DSN public key from `X-Sentry-Auth` header or `sentry_key` query param, validates against DB (cached 5 min)
-3. Handler parses the Sentry envelope wire format (newline-delimited JSON), returns 200 immediately
-4. `event.Processor` runs async (`go` + `context.Background()`): computes fingerprint, upserts issue, stores event/transaction/spans
+3. Handler decompresses (gzip/deflate) and parses the Sentry envelope wire format (newline-delimited JSON), returns 200 immediately
+4. `event.Processor` worker pool (4 goroutines, channel queue of 1000) processes async: computes fingerprint, upserts issue, stores event/transaction/spans. Jobs are dropped if the queue is full.
+5. On new issue or regression (resolved issue receiving new event), sends ntfy notification if configured on the project.
 
 ### Three API Surfaces
 
 - **Ingestion** (`/api/{projectID}/envelope/`, `/store/`) — Sentry-compatible, DSN key auth via middleware
-- **Web API** (`/api/0/...`) — read-only Sentry-compatible endpoints, no auth (MVP)
-- **Admin API** (`/api/admin/...`) — CRUD for orgs/projects/keys/issues, session-authenticated (HMAC-SHA256 cookies)
+- **Web API** (`/api/0/...`) — read-only Sentry-compatible endpoints, session-authenticated
+- **Admin API** (`/api/admin/...`) — CRUD for orgs/projects/keys/issues, performance stats, session-authenticated (HMAC-SHA256 cookies)
+
+Both Web API and Admin API are only mounted when `ADMIN_USER` + `ADMIN_PASSWORD` are set (`cfg.AdminEnabled()`).
 
 ### Key Packages
 
-- `cmd/ampulla/main.go` — entrypoint, router wiring, graceful shutdown
-- `internal/admin/` — session auth (`auth.go`) + embedded single-file admin UI (`ui.go` embeds `index.html`)
-- `internal/api/admin/` — admin CRUD handlers
-- `internal/api/ingest/` — ingestion handlers (envelope + legacy store)
+- `cmd/ampulla/main.go` — entrypoint, router wiring, Sentry self-monitoring, graceful shutdown
+- `internal/admin/` — session auth (`auth.go`, HMAC-SHA256 cookies, login rate limiting) + embedded single-file admin UI (`ui.go` embeds `index.html`)
+- `internal/api/admin/` — admin CRUD handlers + performance stats endpoint
+- `internal/api/ingest/` — ingestion handlers (envelope + legacy store), gzip/deflate decompression
 - `internal/api/web/` — read-only Sentry-compatible API
 - `internal/auth/` — DSN public key extraction and validation middleware (in-memory cache with TTL)
 - `internal/envelope/` — Sentry envelope wire format parser
-- `internal/event/` — domain models (`model.go`) and event processor (`processor.go`)
+- `internal/event/` — domain models (`model.go`), `Envelope`/`EnvelopeItem` types, worker pool processor (`processor.go`), ntfy notifications, cleanup goroutine
 - `internal/grouping/` — fingerprinting: exception type + value + top frame → SHA-256
 - `internal/store/` — PostgreSQL repository (single `postgres.go`) + embedded migrations
 
+### Key Interfaces
+
+`event.Store` (in `processor.go`) defines the DB contract used by the processor: `UpsertIssue`, `InsertEvent`, `InsertTransaction`, `InsertSpans`, `DeleteOldTransactions`, `GetProjectNtfyConfig`. The `store.DB` struct implements this plus all admin/web query methods.
+
 ### Design Decisions
 
-- Synchronous processing, no queue — adequate for 1k-5k events/month
+- Worker pool processing (4 workers, buffered channel) — adequate for 1k-5k events/month
 - JSONB columns preserve full Sentry event payloads
 - Migrations embedded in binary via `embed.FS` from `internal/store/migrations/`
-- Admin UI is a single `index.html` embedded in the Go binary; enabled when `ADMIN_USER` + `ADMIN_PASSWORD` are set
+- Admin UI is a single `index.html` embedded in the Go binary
 - Multi-stage Dockerfile: `golang:1.23-alpine` builder → `alpine:3.21` runtime
 - `docker-compose.yml` is the production compose (includes Traefik labels)
+- Batch span insert (single INSERT with N rows instead of N queries)
+- 30-day retention for transactions/spans via hourly cleanup goroutine (errors kept indefinitely)
+- Self-monitoring: Ampulla reports its own errors to itself via Sentry Go SDK (project 3, `SENTRY_DSN` env var)
+- Sentry tracing middleware on admin/web API routes only (ingestion excluded to avoid loops)
+- Per-project ntfy notifications on new issues and regressions (resolved → new event)
 
 ## Database
 
-PostgreSQL 16. Tables: `organizations`, `projects`, `project_keys`, `issues`, `events`, `transactions`, `spans`. All migrations in `internal/store/migrations/` (currently single `001_initial`).
+PostgreSQL 16. Tables: `organizations`, `projects` (with `ntfy_url`, `ntfy_topic`, `ntfy_token`), `project_keys`, `issues`, `events`, `transactions`, `spans`. Migrations in `internal/store/migrations/` (001 through 004). Migrations use `golang-migrate/migrate` with embedded `iofs` source.
+
+Key constraints: `events.issue_id` → `issues(id) ON DELETE CASCADE`, `spans.transaction_id` → `transactions(id) ON DELETE CASCADE`.
 
 ## DSN Format
 
@@ -79,4 +93,13 @@ https://<public_key>@ampulla.elmisi.com/<project_id>
 
 ## Configuration
 
-All via environment variables. See `.env.example` for defaults. Key vars: `DATABASE_URL` (required), `ADMIN_USER`/`ADMIN_PASSWORD` (enable admin UI), `SESSION_SECRET` (auto-generated if unset), `AMPULLA_DOMAIN`.
+All via environment variables. See `.env.example` for defaults. Key vars: `DATABASE_URL` (required), `ADMIN_USER`/`ADMIN_PASSWORD` (enable admin UI + web/admin APIs), `SESSION_SECRET` (auto-generated if unset), `AMPULLA_DOMAIN`, `SENTRY_DSN` (optional, self-monitoring), `SENTRY_ENVIRONMENT`.
+
+## Notifications
+
+Per-project ntfy integration configured via admin UI (project edit form):
+- **ntfy Server URL** — e.g. `https://n.elmisi.com`
+- **Topic** — e.g. `ampulla-errors`
+- **Token** — optional Bearer token for authenticated ntfy servers
+
+Triggers: new issue (first time fingerprint seen), regression (resolved issue receives new event, auto-reopened to unresolved).
