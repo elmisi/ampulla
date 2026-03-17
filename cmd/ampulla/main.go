@@ -2,6 +2,7 @@ package main
 
 import (
 	"context"
+	"fmt"
 	"log/slog"
 	"net/http"
 	"os"
@@ -87,6 +88,7 @@ func main() {
 
 		// Web API (read-only, session-authenticated)
 		r.Route("/api/0", func(r chi.Router) {
+			r.Use(sentryTracing)
 			r.Use(adminAuth.SessionMiddleware)
 			r.Get("/organizations/", webHandler.ListOrganizations)
 			r.Get("/organizations/{orgSlug}/projects/", webHandler.ListProjects)
@@ -99,6 +101,7 @@ func main() {
 		r.Get("/admin/*", admin.UIHandler().ServeHTTP)
 
 		r.Route("/api/admin", func(r chi.Router) {
+			r.Use(sentryTracing)
 			r.Post("/login", adminAuth.Login)
 			r.Post("/logout", adminAuth.Logout)
 			r.Group(func(r chi.Router) {
@@ -175,4 +178,51 @@ func setupLogger(level string) {
 		l = slog.LevelInfo
 	}
 	slog.SetDefault(slog.New(slog.NewJSONHandler(os.Stdout, &slog.HandlerOptions{Level: l})))
+}
+
+// sentryTracing is a Chi middleware that creates a Sentry transaction for each request.
+func sentryTracing(next http.Handler) http.Handler {
+	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		hub := sentry.CurrentHub().Clone()
+		ctx := sentry.SetHubOnContext(r.Context(), hub)
+
+		name := fmt.Sprintf("%s %s", r.Method, r.URL.Path)
+		txn := sentry.StartTransaction(ctx, name, sentry.ContinueFromRequest(r))
+		txn.Op = "http.server"
+		defer txn.Finish()
+
+		r = r.WithContext(txn.Context())
+
+		ww := &statusWriter{ResponseWriter: w, status: 200}
+		next.ServeHTTP(ww, r)
+
+		txn.Status = httpStatus(ww.status)
+	})
+}
+
+type statusWriter struct {
+	http.ResponseWriter
+	status int
+}
+
+func (w *statusWriter) WriteHeader(code int) {
+	w.status = code
+	w.ResponseWriter.WriteHeader(code)
+}
+
+func httpStatus(code int) sentry.SpanStatus {
+	switch {
+	case code < 400:
+		return sentry.SpanStatusOK
+	case code == 404:
+		return sentry.SpanStatusNotFound
+	case code == 403:
+		return sentry.SpanStatusPermissionDenied
+	case code == 429:
+		return sentry.SpanStatusResourceExhausted
+	case code < 500:
+		return sentry.SpanStatusInvalidArgument
+	default:
+		return sentry.SpanStatusInternalError
+	}
 }
