@@ -17,7 +17,7 @@ Go is **not installed locally** — all builds and tests run via Docker:
 # Build
 docker run --rm -v $(pwd):/app -w /app golang:1.23-alpine go build ./cmd/ampulla
 
-# Run all tests
+# Run all tests (pure unit tests, no DB required)
 docker run --rm -v $(pwd):/app -w /app golang:1.23-alpine go test ./...
 
 # Run a single package's tests
@@ -26,9 +26,14 @@ docker run --rm -v $(pwd):/app -w /app golang:1.23-alpine go test ./internal/env
 # Run locally (production compose with Traefik labels)
 docker compose up -d
 
+# Manual ingestion test (requires running instance)
+./test-event.sh
+
 # Deploy
 cd ../traefik.services && ./deploy.sh ampulla
 ```
+
+Tests exist for `internal/envelope/` and `internal/grouping/` — both are pure unit tests with no external dependencies. Test style: `TestFunctionName` or `TestFunctionName_Scenario`, table-driven where appropriate, stdlib `testing` only (no assertion libraries).
 
 ## Architecture
 
