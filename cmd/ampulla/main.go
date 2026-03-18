@@ -139,6 +139,8 @@ func main() {
 				r.Get("/issues/{id}/events", adminHandler.ListIssueEvents)
 
 				r.Get("/transactions", adminHandler.ListTransactions)
+				r.Get("/transactions/{id}", adminHandler.GetTransaction)
+				r.Get("/transactions/{id}/spans", adminHandler.ListTransactionSpans)
 				r.Get("/performance", adminHandler.Performance)
 			})
 		})

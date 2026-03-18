@@ -561,6 +561,65 @@ func (db *DB) DeleteIssue(ctx context.Context, id int64) error {
 	return err
 }
 
+// GetTransaction returns a single transaction by ID.
+func (db *DB) GetTransaction(ctx context.Context, id int64) (*event.Transaction, error) {
+	var t event.Transaction
+	var op, status *string
+	err := db.pool.QueryRow(ctx,
+		`SELECT id, event_id, project_id, trace_id, span_id, op, name,
+		        duration_ms, status, timestamp, data, received_at
+		 FROM transactions WHERE id = $1`, id).
+		Scan(&t.ID, &t.EventID, &t.ProjectID, &t.TraceID, &t.SpanID,
+			&op, &t.Name, &t.DurationMs, &status, &t.Timestamp, &t.Data, &t.ReceivedAt)
+	if err != nil {
+		return nil, err
+	}
+	if op != nil {
+		t.Op = *op
+	}
+	if status != nil {
+		t.Status = *status
+	}
+	return &t, nil
+}
+
+// ListSpansByTransaction returns all spans for a transaction.
+func (db *DB) ListSpansByTransaction(ctx context.Context, txnID int64) ([]event.Span, error) {
+	rows, err := db.pool.Query(ctx,
+		`SELECT id, transaction_id, trace_id, span_id, parent_span_id, op,
+		        description, duration_ms, status, timestamp, data
+		 FROM spans WHERE transaction_id = $1
+		 ORDER BY timestamp`, txnID)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+
+	var spans []event.Span
+	for rows.Next() {
+		var s event.Span
+		var parentSpanID, op, description, status *string
+		if err := rows.Scan(&s.ID, &s.TransactionID, &s.TraceID, &s.SpanID,
+			&parentSpanID, &op, &description, &s.DurationMs, &status, &s.Timestamp, &s.Data); err != nil {
+			return nil, err
+		}
+		if parentSpanID != nil {
+			s.ParentSpanID = *parentSpanID
+		}
+		if op != nil {
+			s.Op = *op
+		}
+		if description != nil {
+			s.Description = *description
+		}
+		if status != nil {
+			s.Status = *status
+		}
+		spans = append(spans, s)
+	}
+	return spans, nil
+}
+
 // AdminListTransactions returns transactions, optionally filtered by project ID.
 func (db *DB) AdminListTransactions(ctx context.Context, projectID, cursor int64, limit int) ([]event.Transaction, error) {
 	if limit <= 0 || limit > 100 {

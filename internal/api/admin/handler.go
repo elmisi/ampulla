@@ -361,6 +361,37 @@ func (h *Handler) ListIssueEvents(w http.ResponseWriter, r *http.Request) {
 
 // --- Transactions ---
 
+func (h *Handler) GetTransaction(w http.ResponseWriter, r *http.Request) {
+	id, err := paramInt64(r, "id")
+	if err != nil {
+		http.Error(w, `{"error":"invalid id"}`, http.StatusBadRequest)
+		return
+	}
+	txn, err := h.db.GetTransaction(r.Context(), id)
+	if err != nil {
+		serverError(w, err)
+		return
+	}
+	writeJSON(w, http.StatusOK, txn)
+}
+
+func (h *Handler) ListTransactionSpans(w http.ResponseWriter, r *http.Request) {
+	id, err := paramInt64(r, "id")
+	if err != nil {
+		http.Error(w, `{"error":"invalid id"}`, http.StatusBadRequest)
+		return
+	}
+	spans, err := h.db.ListSpansByTransaction(r.Context(), id)
+	if err != nil {
+		serverError(w, err)
+		return
+	}
+	if spans == nil {
+		spans = []event.Span{}
+	}
+	writeJSON(w, http.StatusOK, spans)
+}
+
 func (h *Handler) ListTransactions(w http.ResponseWriter, r *http.Request) {
 	projectID, _ := strconv.ParseInt(r.URL.Query().Get("project"), 10, 64)
 	cursor, limit := parsePagination(r)
