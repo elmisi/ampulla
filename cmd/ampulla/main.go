@@ -39,7 +39,8 @@ func main() {
 			Dsn:              dsn,
 			Release:          "ampulla@" + version.String(),
 			Environment:      os.Getenv("SENTRY_ENVIRONMENT"),
-			TracesSampleRate: 0.1,
+			EnableTracing:    true,
+			TracesSampleRate: 1.0,
 		}); err != nil {
 			slog.Warn("sentry init failed", "error", err)
 		} else {
