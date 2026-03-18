@@ -40,7 +40,7 @@ func main() {
 			Release:          "ampulla@" + version.String(),
 			Environment:      os.Getenv("SENTRY_ENVIRONMENT"),
 			EnableTracing:    true,
-			TracesSampleRate: 1.0,
+			TracesSampleRate: 0.1,
 		}); err != nil {
 			slog.Warn("sentry init failed", "error", err)
 		} else {
