@@ -223,8 +223,12 @@ function render(content, showNav=true) {
   const app = document.getElementById('app');
   app.innerHTML = '';
   if (showNav) {
+    const logoDiv = el('div', { className: 'logo' }, 'ampulla');
+    fetch('/api/version').then(r => r.json()).then(d => {
+      logoDiv.appendChild(el('span', { style: 'font-size:11px;color:var(--muted);font-weight:400;margin-left:8px' }, 'v' + d.version));
+    }).catch(() => {});
     const n = el('nav', null,
-      el('div', { className: 'logo' }, 'ampulla'),
+      logoDiv,
       navLink('/', 'Dashboard'),
       navLink('/orgs', 'Organizations'),
       navLink('/issues', 'Issues'),

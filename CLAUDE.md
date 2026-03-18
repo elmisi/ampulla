@@ -15,7 +15,7 @@ Go is **not installed locally** — all builds and tests run via Docker:
 
 ```bash
 # Build
-docker run --rm -v $(pwd):/app -w /app golang:1.23-alpine go build ./cmd/ampulla
+docker run --rm -v $(pwd):/app -w /app golang:1.23-alpine go build -ldflags "-X github.com/elmisi/ampulla/internal/version.Value=$(cat VERSION)" ./cmd/ampulla
 
 # Run all tests (pure unit tests, no DB required)
 docker run --rm -v $(pwd):/app -w /app golang:1.23-alpine go test ./...

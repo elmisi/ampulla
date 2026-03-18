@@ -18,6 +18,7 @@ import (
 	"github.com/elmisi/ampulla/internal/config"
 	"github.com/elmisi/ampulla/internal/event"
 	"github.com/elmisi/ampulla/internal/store"
+	"github.com/elmisi/ampulla/internal/version"
 	"github.com/getsentry/sentry-go"
 	"github.com/go-chi/chi/v5"
 	"github.com/go-chi/chi/v5/middleware"
@@ -31,10 +32,12 @@ func main() {
 	}
 
 	setupLogger(cfg.LogLevel)
+	slog.Info("ampulla starting", "version", version.String())
 
 	if dsn := os.Getenv("SENTRY_DSN"); dsn != "" {
 		if err := sentry.Init(sentry.ClientOptions{
 			Dsn:              dsn,
+			Release:          "ampulla@" + version.String(),
 			Environment:      os.Getenv("SENTRY_ENVIRONMENT"),
 			TracesSampleRate: 0.1,
 		}); err != nil {
@@ -72,6 +75,10 @@ func main() {
 	r.Get("/health", func(w http.ResponseWriter, r *http.Request) {
 		w.WriteHeader(http.StatusOK)
 		w.Write([]byte(`{"status":"ok"}`))
+	})
+	r.Get("/api/version", func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		w.Write([]byte(`{"version":"` + version.String() + `"}`))
 	})
 
 	// Ingestion endpoints (auth required)
