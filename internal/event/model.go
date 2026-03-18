@@ -15,15 +15,17 @@ type Organization struct {
 }
 
 type Project struct {
-	ID        int64     `json:"id"`
-	OrgID     int64     `json:"organizationId"`
-	Name      string    `json:"name"`
-	Slug      string    `json:"slug"`
-	Platform  string    `json:"platform,omitempty"`
-	CreatedAt time.Time `json:"dateCreated"`
-	NtfyURL   string    `json:"ntfyUrl,omitempty"`
-	NtfyTopic string    `json:"ntfyTopic,omitempty"`
-	NtfyToken string    `json:"ntfyToken,omitempty"`
+	ID              int64     `json:"id"`
+	OrgID           int64     `json:"organizationId"`
+	Name            string    `json:"name"`
+	Slug            string    `json:"slug"`
+	Platform        string    `json:"platform,omitempty"`
+	CreatedAt       time.Time `json:"dateCreated"`
+	NtfyURL         string    `json:"ntfyUrl,omitempty"`
+	NtfyTopic       string    `json:"ntfyTopic,omitempty"`
+	NtfyToken       string    `json:"ntfyToken,omitempty"`
+	KnownSDKVersion string    `json:"knownSdkVersion,omitempty"`
+	LastSDKVersion  string    `json:"lastSdkVersion,omitempty"`
 }
 
 type ProjectKey struct {
@@ -113,6 +115,14 @@ type PerformanceStats struct {
 	Endpoints       []EndpointStats `json:"endpoints"`
 	TotalCount      int64           `json:"totalCount"`
 	OldestTimestamp *time.Time      `json:"oldestTransaction"`
+}
+
+// SDKAlert represents a project with mismatched SDK version.
+type SDKAlert struct {
+	ProjectID    int64  `json:"projectId"`
+	ProjectName  string `json:"projectName"`
+	KnownVersion string `json:"knownVersion"`
+	LastVersion  string `json:"lastVersion"`
 }
 
 // Envelope represents a parsed Sentry envelope

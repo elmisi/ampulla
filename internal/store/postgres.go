@@ -198,10 +198,43 @@ func (db *DB) ListOrganizations(ctx context.Context) ([]event.Organization, erro
 	return orgs, nil
 }
 
+// scannable abstracts pgx.Row and pgx.Rows for the shared scanProject helper.
+type scannable interface {
+	Scan(dest ...any) error
+}
+
+func scanProject(row scannable, p *event.Project) error {
+	var platform, ntfyURL, ntfyTopic, ntfyToken, knownSDK, lastSDK *string
+	if err := row.Scan(&p.ID, &p.OrgID, &p.Name, &p.Slug, &platform, &p.CreatedAt,
+		&ntfyURL, &ntfyTopic, &ntfyToken, &knownSDK, &lastSDK); err != nil {
+		return err
+	}
+	if platform != nil {
+		p.Platform = *platform
+	}
+	if ntfyURL != nil {
+		p.NtfyURL = *ntfyURL
+	}
+	if ntfyTopic != nil {
+		p.NtfyTopic = *ntfyTopic
+	}
+	if ntfyToken != nil {
+		p.NtfyToken = *ntfyToken
+	}
+	if knownSDK != nil {
+		p.KnownSDKVersion = *knownSDK
+	}
+	if lastSDK != nil {
+		p.LastSDKVersion = *lastSDK
+	}
+	return nil
+}
+
 // ListProjects returns projects for an organization slug.
 func (db *DB) ListProjects(ctx context.Context, orgSlug string) ([]event.Project, error) {
 	rows, err := db.pool.Query(ctx, `
-		SELECT p.id, p.org_id, p.name, p.slug, p.platform, p.created_at, p.ntfy_url, p.ntfy_topic, p.ntfy_token
+		SELECT p.id, p.org_id, p.name, p.slug, p.platform, p.created_at,
+		       p.ntfy_url, p.ntfy_topic, p.ntfy_token, p.known_sdk_version, p.last_sdk_version
 		FROM projects p
 		JOIN organizations o ON o.id = p.org_id
 		WHERE o.slug = $1
@@ -215,21 +248,8 @@ func (db *DB) ListProjects(ctx context.Context, orgSlug string) ([]event.Project
 	var projects []event.Project
 	for rows.Next() {
 		var p event.Project
-		var platform, ntfyURL, ntfyTopic, ntfyToken *string
-		if err := rows.Scan(&p.ID, &p.OrgID, &p.Name, &p.Slug, &platform, &p.CreatedAt, &ntfyURL, &ntfyTopic, &ntfyToken); err != nil {
+		if err := scanProject(rows, &p); err != nil {
 			return nil, err
-		}
-		if platform != nil {
-			p.Platform = *platform
-		}
-		if ntfyURL != nil {
-			p.NtfyURL = *ntfyURL
-		}
-		if ntfyTopic != nil {
-			p.NtfyTopic = *ntfyTopic
-		}
-		if ntfyToken != nil {
-			p.NtfyToken = *ntfyToken
 		}
 		projects = append(projects, p)
 	}
@@ -394,8 +414,8 @@ func (db *DB) CreateProject(ctx context.Context, orgID int64, name, slug, platfo
 }
 
 // UpdateProject updates a project.
-func (db *DB) UpdateProject(ctx context.Context, id int64, name, slug, platform, ntfyURL, ntfyTopic, ntfyToken string) error {
-	var plat, nURL, nTopic, nToken *string
+func (db *DB) UpdateProject(ctx context.Context, id int64, name, slug, platform, ntfyURL, ntfyTopic, ntfyToken, knownSDKVersion string) error {
+	var plat, nURL, nTopic, nToken, kSDK *string
 	if platform != "" {
 		plat = &platform
 	}
@@ -408,8 +428,20 @@ func (db *DB) UpdateProject(ctx context.Context, id int64, name, slug, platform,
 	if ntfyToken != "" {
 		nToken = &ntfyToken
 	}
-	_, err := db.pool.Exec(ctx, `UPDATE projects SET name = $1, slug = $2, platform = $3, ntfy_url = $4, ntfy_topic = $5, ntfy_token = $6 WHERE id = $7`,
-		name, slug, plat, nURL, nTopic, nToken, id)
+	if knownSDKVersion != "" {
+		kSDK = &knownSDKVersion
+	}
+	_, err := db.pool.Exec(ctx,
+		`UPDATE projects SET name = $1, slug = $2, platform = $3, ntfy_url = $4, ntfy_topic = $5, ntfy_token = $6, known_sdk_version = $7 WHERE id = $8`,
+		name, slug, plat, nURL, nTopic, nToken, kSDK, id)
+	return err
+}
+
+// UpdateLastSDKVersion updates the last seen SDK version for a project.
+func (db *DB) UpdateLastSDKVersion(ctx context.Context, projectID int64, sdkVersion string) error {
+	_, err := db.pool.Exec(ctx,
+		`UPDATE projects SET last_sdk_version = $1 WHERE id = $2`,
+		sdkVersion, projectID)
 	return err
 }
 
@@ -422,7 +454,8 @@ func (db *DB) DeleteProject(ctx context.Context, id int64) error {
 // ListAllProjects returns all projects.
 func (db *DB) ListAllProjects(ctx context.Context) ([]event.Project, error) {
 	rows, err := db.pool.Query(ctx, `
-		SELECT p.id, p.org_id, p.name, p.slug, p.platform, p.created_at, p.ntfy_url, p.ntfy_topic, p.ntfy_token
+		SELECT p.id, p.org_id, p.name, p.slug, p.platform, p.created_at,
+		       p.ntfy_url, p.ntfy_topic, p.ntfy_token, p.known_sdk_version, p.last_sdk_version
 		FROM projects p ORDER BY p.name
 	`)
 	if err != nil {
@@ -433,21 +466,8 @@ func (db *DB) ListAllProjects(ctx context.Context) ([]event.Project, error) {
 	var projects []event.Project
 	for rows.Next() {
 		var p event.Project
-		var platform, ntfyURL, ntfyTopic, ntfyToken *string
-		if err := rows.Scan(&p.ID, &p.OrgID, &p.Name, &p.Slug, &platform, &p.CreatedAt, &ntfyURL, &ntfyTopic, &ntfyToken); err != nil {
+		if err := scanProject(rows, &p); err != nil {
 			return nil, err
-		}
-		if platform != nil {
-			p.Platform = *platform
-		}
-		if ntfyURL != nil {
-			p.NtfyURL = *ntfyURL
-		}
-		if ntfyTopic != nil {
-			p.NtfyTopic = *ntfyTopic
-		}
-		if ntfyToken != nil {
-			p.NtfyToken = *ntfyToken
 		}
 		projects = append(projects, p)
 	}
@@ -671,6 +691,32 @@ func (db *DB) AdminListTransactions(ctx context.Context, projectID, cursor int64
 	return txns, nil
 }
 
+// SDKAlerts returns projects where the last seen SDK version differs from the known version.
+func (db *DB) SDKAlerts(ctx context.Context) ([]event.SDKAlert, error) {
+	rows, err := db.pool.Query(ctx, `
+		SELECT id, name, known_sdk_version, last_sdk_version
+		FROM projects
+		WHERE known_sdk_version IS NOT NULL
+		  AND last_sdk_version IS NOT NULL
+		  AND known_sdk_version != last_sdk_version
+		ORDER BY name
+	`)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+
+	var alerts []event.SDKAlert
+	for rows.Next() {
+		var a event.SDKAlert
+		if err := rows.Scan(&a.ProjectID, &a.ProjectName, &a.KnownVersion, &a.LastVersion); err != nil {
+			return nil, err
+		}
+		alerts = append(alerts, a)
+	}
+	return alerts, nil
+}
+
 // DashboardStats returns aggregate counts.
 func (db *DB) DashboardStats(ctx context.Context) (map[string]int64, error) {
 	stats := map[string]int64{}
@@ -799,29 +845,16 @@ func generateKey() string {
 // GetProjectByOrgAndSlug returns a project by org slug and project slug.
 func (db *DB) GetProjectByOrgAndSlug(ctx context.Context, orgSlug, projectSlug string) (*event.Project, error) {
 	row := db.pool.QueryRow(ctx, `
-		SELECT p.id, p.org_id, p.name, p.slug, p.platform, p.created_at, p.ntfy_url, p.ntfy_topic, p.ntfy_token
+		SELECT p.id, p.org_id, p.name, p.slug, p.platform, p.created_at,
+		       p.ntfy_url, p.ntfy_topic, p.ntfy_token, p.known_sdk_version, p.last_sdk_version
 		FROM projects p
 		JOIN organizations o ON o.id = p.org_id
 		WHERE o.slug = $1 AND p.slug = $2
 	`, orgSlug, projectSlug)
 
 	var p event.Project
-	var platform, ntfyURL, ntfyTopic, ntfyToken *string
-	err := row.Scan(&p.ID, &p.OrgID, &p.Name, &p.Slug, &platform, &p.CreatedAt, &ntfyURL, &ntfyTopic, &ntfyToken)
-	if err != nil {
+	if err := scanProject(row, &p); err != nil {
 		return nil, err
-	}
-	if platform != nil {
-		p.Platform = *platform
-	}
-	if ntfyURL != nil {
-		p.NtfyURL = *ntfyURL
-	}
-	if ntfyTopic != nil {
-		p.NtfyTopic = *ntfyTopic
-	}
-	if ntfyToken != nil {
-		p.NtfyToken = *ntfyToken
 	}
 	return &p, nil
 }

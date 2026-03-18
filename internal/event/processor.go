@@ -29,11 +29,13 @@ type Store interface {
 	InsertSpans(ctx context.Context, txnID int64, traceID uuid.UUID, spans []Span) error
 	DeleteOldTransactions(ctx context.Context, before time.Time) (int64, error)
 	GetProjectNtfyConfig(ctx context.Context, projectID int64) (projectName, ntfyURL, ntfyTopic, ntfyToken string, err error)
+	UpdateLastSDKVersion(ctx context.Context, projectID int64, sdkVersion string) error
 }
 
 type job struct {
 	projectID int64
 	env       *Envelope
+	sdkClient string
 }
 
 type Processor struct {
@@ -65,14 +67,14 @@ func NewProcessor(s Store, domain string) *Processor {
 func (p *Processor) worker() {
 	defer p.wg.Done()
 	for j := range p.queue {
-		p.Process(context.Background(), j.projectID, j.env)
+		p.Process(context.Background(), j.projectID, j.env, j.sdkClient)
 	}
 }
 
 // Enqueue submits a job for async processing. Drops the job if the queue is full.
-func (p *Processor) Enqueue(projectID int64, env *Envelope) {
+func (p *Processor) Enqueue(projectID int64, env *Envelope, sdkClient string) {
 	select {
-	case p.queue <- job{projectID: projectID, env: env}:
+	case p.queue <- job{projectID: projectID, env: env, sdkClient: sdkClient}:
 	default:
 		slog.Warn("event queue full, dropping event", "project", projectID, "event", env.Header.EventID)
 	}
@@ -158,7 +160,7 @@ func (p *Processor) sendNtfy(projectID int64, result *UpsertResult) {
 }
 
 // Process handles all items in an envelope for the given project.
-func (p *Processor) Process(ctx context.Context, projectID int64, env *Envelope) {
+func (p *Processor) Process(ctx context.Context, projectID int64, env *Envelope, sdkClient string) {
 	for _, item := range env.Items {
 		switch item.Type {
 		case "event":
@@ -169,6 +171,11 @@ func (p *Processor) Process(ctx context.Context, projectID int64, env *Envelope)
 			if err := p.processTransaction(ctx, projectID, item.Payload); err != nil {
 				slog.Error("process transaction failed", "project", projectID, "error", err)
 			}
+		}
+	}
+	if sdkClient != "" {
+		if err := p.store.UpdateLastSDKVersion(ctx, projectID, sdkClient); err != nil {
+			slog.Warn("update last sdk version failed", "project", projectID, "error", err)
 		}
 	}
 }

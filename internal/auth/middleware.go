@@ -14,12 +14,21 @@ import (
 
 type contextKey string
 
-const projectContextKey contextKey = "project"
+const (
+	projectContextKey    contextKey = "project"
+	sdkClientContextKey  contextKey = "sentry_client"
+)
 
 // ProjectFromContext retrieves the authenticated project from request context.
 func ProjectFromContext(ctx context.Context) *event.Project {
 	p, _ := ctx.Value(projectContextKey).(*event.Project)
 	return p
+}
+
+// SDKClientFromContext retrieves the sentry_client value from request context.
+func SDKClientFromContext(ctx context.Context) string {
+	s, _ := ctx.Value(sdkClientContextKey).(string)
+	return s
 }
 
 type cachedKey struct {
@@ -66,6 +75,9 @@ func (m *Middleware) Authenticate(next http.Handler) http.Handler {
 		}
 
 		ctx := context.WithValue(r.Context(), projectContextKey, project)
+		if client := extractSentryClient(r); client != "" {
+			ctx = context.WithValue(ctx, sdkClientContextKey, client)
+		}
 		next.ServeHTTP(w, r.WithContext(ctx))
 	})
 }
@@ -107,6 +119,23 @@ func (m *Middleware) evictExpired() {
 			delete(m.cache, k)
 		}
 	}
+}
+
+// extractSentryClient gets the sentry_client value from the X-Sentry-Auth header.
+// Format: Sentry sentry_version=7, sentry_client=sentry.python/1.45.2, sentry_key=<key>
+func extractSentryClient(r *http.Request) string {
+	auth := r.Header.Get("X-Sentry-Auth")
+	if auth == "" {
+		return ""
+	}
+	for _, part := range strings.Split(auth, ",") {
+		part = strings.TrimSpace(part)
+		part = strings.TrimPrefix(part, "Sentry ")
+		if strings.HasPrefix(part, "sentry_client=") {
+			return strings.TrimPrefix(part, "sentry_client=")
+		}
+	}
+	return ""
 }
 
 // extractPublicKey gets the DSN public key from the request.

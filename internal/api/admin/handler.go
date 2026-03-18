@@ -142,12 +142,13 @@ func (h *Handler) UpdateProject(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	var req struct {
-		Name      string `json:"name"`
-		Slug      string `json:"slug"`
-		Platform  string `json:"platform"`
-		NtfyURL   string `json:"ntfyUrl"`
-		NtfyTopic string `json:"ntfyTopic"`
-		NtfyToken string `json:"ntfyToken"`
+		Name            string `json:"name"`
+		Slug            string `json:"slug"`
+		Platform        string `json:"platform"`
+		NtfyURL         string `json:"ntfyUrl"`
+		NtfyTopic       string `json:"ntfyTopic"`
+		NtfyToken       string `json:"ntfyToken"`
+		KnownSDKVersion string `json:"knownSdkVersion"`
 	}
 	if err := json.NewDecoder(r.Body).Decode(&req); err != nil || req.Name == "" || req.Slug == "" {
 		http.Error(w, `{"error":"name and slug required"}`, http.StatusBadRequest)
@@ -157,7 +158,7 @@ func (h *Handler) UpdateProject(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, `{"error":"name max 255 chars, slug max 64 chars"}`, http.StatusBadRequest)
 		return
 	}
-	if err := h.db.UpdateProject(r.Context(), id, req.Name, req.Slug, req.Platform, req.NtfyURL, req.NtfyTopic, req.NtfyToken); err != nil {
+	if err := h.db.UpdateProject(r.Context(), id, req.Name, req.Slug, req.Platform, req.NtfyURL, req.NtfyTopic, req.NtfyToken, req.KnownSDKVersion); err != nil {
 		serverError(w, err)
 		return
 	}
@@ -411,7 +412,18 @@ func (h *Handler) Dashboard(w http.ResponseWriter, r *http.Request) {
 		serverError(w, err)
 		return
 	}
-	writeJSON(w, http.StatusOK, stats)
+	alerts, err := h.db.SDKAlerts(r.Context())
+	if err != nil {
+		serverError(w, err)
+		return
+	}
+	if alerts == nil {
+		alerts = []event.SDKAlert{}
+	}
+	writeJSON(w, http.StatusOK, map[string]any{
+		"counts":    stats,
+		"sdkAlerts": alerts,
+	})
 }
 
 // --- Performance ---

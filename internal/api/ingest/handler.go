@@ -55,7 +55,8 @@ func (h *Handler) Envelope(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	h.processor.Enqueue(project.ID, env)
+	sdkClient := auth.SDKClientFromContext(r.Context())
+	h.processor.Enqueue(project.ID, env, sdkClient)
 
 	w.Header().Set("Content-Type", "application/json")
 	w.WriteHeader(http.StatusOK)
@@ -94,7 +95,8 @@ func (h *Handler) Store(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	h.processor.Enqueue(project.ID, env)
+	sdkClient2 := auth.SDKClientFromContext(r.Context())
+	h.processor.Enqueue(project.ID, env, sdkClient2)
 
 	w.Header().Set("Content-Type", "application/json")
 	w.WriteHeader(http.StatusOK)
