@@ -330,6 +330,20 @@ func (h *Handler) DeleteIssue(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, http.StatusOK, map[string]string{"ok": "true"})
 }
 
+func (h *Handler) GetIssue(w http.ResponseWriter, r *http.Request) {
+	id, err := paramInt64(r, "id")
+	if err != nil {
+		http.Error(w, `{"error":"invalid id"}`, http.StatusBadRequest)
+		return
+	}
+	issue, err := h.db.GetIssue(r.Context(), id)
+	if err != nil {
+		serverError(w, err)
+		return
+	}
+	writeJSON(w, http.StatusOK, issue)
+}
+
 func (h *Handler) ListIssueEvents(w http.ResponseWriter, r *http.Request) {
 	issueID, err := paramInt64(r, "id")
 	if err != nil {

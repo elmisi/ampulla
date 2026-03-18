@@ -38,15 +38,17 @@ type job struct {
 
 type Processor struct {
 	store  Store
+	domain string
 	queue  chan job
 	wg     sync.WaitGroup
 	done   chan struct{}
 	ticker *time.Ticker
 }
 
-func NewProcessor(s Store) *Processor {
+func NewProcessor(s Store, domain string) *Processor {
 	p := &Processor{
 		store:  s,
+		domain: domain,
 		queue:  make(chan job, queueSize),
 		done:   make(chan struct{}),
 		ticker: time.NewTicker(cleanupInterval),
@@ -120,22 +122,25 @@ func (p *Processor) sendNtfy(projectID int64, result *UpsertResult) {
 	}
 
 	issue := result.Issue
-	var kind string
+	var prio string
 	if result.IsNew {
-		kind = "New"
+		prio = "new"
 	} else {
-		kind = "Regression"
+		prio = "regression"
 	}
 	title := fmt.Sprintf("[%s] %s", projectName, issue.Title)
-	body := fmt.Sprintf("%s\nFirst seen: %s", kind, issue.FirstSeen.Format("2006-01-02 15:04"))
+	body := fmt.Sprintf("level: %s | prio: %s\nFirst seen: %s",
+		issue.Level, prio, issue.FirstSeen.UTC().Format(time.RFC3339))
+	clickURL := fmt.Sprintf("https://%s/admin/#/issues/%d", p.domain, issue.ID)
 
-	url := fmt.Sprintf("%s/%s", strings.TrimRight(ntfyURL, "/"), ntfyTopic)
-	req, err := http.NewRequestWithContext(ctx, "POST", url, strings.NewReader(body))
+	endpoint := fmt.Sprintf("%s/%s", strings.TrimRight(ntfyURL, "/"), ntfyTopic)
+	req, err := http.NewRequestWithContext(ctx, "POST", endpoint, strings.NewReader(body))
 	if err != nil {
 		slog.Warn("ntfy request build failed", "project", projectID, "error", err)
 		return
 	}
 	req.Header.Set("Title", title)
+	req.Header.Set("Click", clickURL)
 	req.Header.Set("Priority", "default")
 	if ntfyToken != "" {
 		req.Header.Set("Authorization", "Bearer "+ntfyToken)

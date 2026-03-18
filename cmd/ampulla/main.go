@@ -59,7 +59,7 @@ func main() {
 		os.Exit(1)
 	}
 
-	processor := event.NewProcessor(db)
+	processor := event.NewProcessor(db, cfg.Domain)
 	authMiddleware := auth.NewMiddleware(db)
 	ingestHandler := ingest.NewHandler(processor)
 	webHandler := web.NewHandler(db)
@@ -126,6 +126,7 @@ func main() {
 				r.Delete("/keys/{id}", adminHandler.DeleteProjectKey)
 
 				r.Get("/issues", adminHandler.ListIssues)
+				r.Get("/issues/{id}", adminHandler.GetIssue)
 				r.Put("/issues/{id}", adminHandler.UpdateIssue)
 				r.Delete("/issues/{id}", adminHandler.DeleteIssue)
 				r.Get("/issues/{id}/events", adminHandler.ListIssueEvents)

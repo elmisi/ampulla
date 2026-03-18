@@ -503,6 +503,20 @@ func (db *DB) DeleteProjectKey(ctx context.Context, id int64) error {
 	return err
 }
 
+// GetIssue returns a single issue by ID.
+func (db *DB) GetIssue(ctx context.Context, id int64) (*event.Issue, error) {
+	var i event.Issue
+	err := db.pool.QueryRow(ctx,
+		`SELECT id, project_id, title, fingerprint, level, status, first_seen, last_seen, event_count
+		 FROM issues WHERE id = $1`, id).
+		Scan(&i.ID, &i.ProjectID, &i.Title, &i.Fingerprint, &i.Level,
+			&i.Status, &i.FirstSeen, &i.LastSeen, &i.EventCount)
+	if err != nil {
+		return nil, err
+	}
+	return &i, nil
+}
+
 // AdminListIssues returns issues, optionally filtered by project ID.
 func (db *DB) AdminListIssues(ctx context.Context, projectID, cursor int64, limit int) ([]event.Issue, error) {
 	if limit <= 0 || limit > 100 {
