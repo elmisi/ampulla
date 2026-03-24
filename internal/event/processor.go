@@ -131,8 +131,12 @@ func (p *Processor) sendNtfy(projectID int64, result *UpsertResult) {
 		prio = "regression"
 	}
 	title := fmt.Sprintf("[%s] %s", projectName, issue.Title)
-	body := fmt.Sprintf("level: %s | prio: %s\nFirst seen: %s",
-		issue.Level, prio, issue.FirstSeen.UTC().Format(time.RFC3339))
+	envInfo := ""
+	if issue.Environment != "" {
+		envInfo = fmt.Sprintf(" | env: %s", issue.Environment)
+	}
+	body := fmt.Sprintf("level: %s | prio: %s%s\nFirst seen: %s",
+		issue.Level, prio, envInfo, issue.FirstSeen.UTC().Format(time.RFC3339))
 	clickURL := fmt.Sprintf("https://%s/admin/#/issues/%d", p.domain, issue.ID)
 
 	endpoint := fmt.Sprintf("%s/%s", strings.TrimRight(ntfyURL, "/"), ntfyTopic)
