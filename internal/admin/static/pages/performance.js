@@ -1,4 +1,4 @@
-import { el, toast, timeAgo } from '../utils.js';
+import { el, toast, timeAgo, getSelectedProject, setSelectedProject } from '../utils.js';
 import router from '../router.js';
 import api from '../api.js';
 import { render } from '../app.js';
@@ -12,7 +12,8 @@ router.on('/performance', async () => {
   const sel = el('select');
   sel.appendChild(el('option', { value: '' }, 'All projects'));
   projects.forEach(p => sel.appendChild(el('option', { value: String(p.id) }, p.name)));
-  sel.onchange = () => loadPerf();
+  sel.value = getSelectedProject();
+  sel.onchange = () => { setSelectedProject(sel.value); loadPerf(); };
   toolbar.appendChild(sel);
   const timeSel = el('select');
   [{ v: '1', l: 'Last 24 hours' }, { v: '7', l: 'Last 7 days' }, { v: '30', l: 'Last 30 days' }].forEach(o => {

@@ -1,4 +1,4 @@
-import { el, toast, confirm, timeAgo, levelBadge, statusBadge } from '../utils.js';
+import { el, toast, confirm, timeAgo, levelBadge, statusBadge, getSelectedProject, setSelectedProject } from '../utils.js';
 import router from '../router.js';
 import api from '../api.js';
 import { render } from '../app.js';
@@ -13,7 +13,8 @@ router.on('/issues', async () => {
   const sel = el('select');
   sel.appendChild(el('option', { value: '' }, 'All projects'));
   projects.forEach(p => sel.appendChild(el('option', { value: String(p.id) }, p.name)));
-  sel.onchange = () => loadIssues();
+  sel.value = getSelectedProject();
+  sel.onchange = () => { setSelectedProject(sel.value); loadIssues(); };
   toolbar.appendChild(sel);
   frag.appendChild(toolbar);
 

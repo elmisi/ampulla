@@ -42,6 +42,10 @@ export function toast(msg, type = 'success') {
   setTimeout(() => e.remove(), 3000);
 }
 
+const PROJECT_KEY = 'ampulla_project';
+export function getSelectedProject() { return localStorage.getItem(PROJECT_KEY) || ''; }
+export function setSelectedProject(id) { localStorage.setItem(PROJECT_KEY, id); }
+
 export function confirm(msg) {
   return new Promise(resolve => {
     const overlay = document.createElement('div');
