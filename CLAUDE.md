@@ -45,8 +45,9 @@ Tests exist for `internal/envelope/` and `internal/grouping/` — both are pure 
 4. `event.Processor` worker pool (4 goroutines, channel queue of 1000) processes async: computes fingerprint, upserts issue, stores event/transaction/spans. Jobs are dropped if the queue is full.
 5. On new issue or regression (resolved issue receiving new event), sends ntfy notification if configured on the project.
 
-### Three API Surfaces
+### API Surfaces
 
+- **Utility** (`/health`, `/api/version`) — unauthenticated, always available
 - **Ingestion** (`/api/{projectID}/envelope/`, `/store/`) — Sentry-compatible, DSN key auth via middleware
 - **Web API** (`/api/0/...`) — read-only Sentry-compatible endpoints, session-authenticated
 - **Admin API** (`/api/admin/...`) — CRUD for orgs/projects/keys/issues, performance stats, session-authenticated (HMAC-SHA256 cookies)
@@ -98,7 +99,25 @@ https://<public_key>@ampulla.elmisi.com/<project_id>
 
 ## Configuration
 
-All via environment variables. See `.env.example` for defaults. Key vars: `DATABASE_URL` (required), `ADMIN_USER`/`ADMIN_PASSWORD` (enable admin UI + web/admin APIs), `SESSION_SECRET` (auto-generated if unset), `AMPULLA_DOMAIN`, `SENTRY_DSN` (optional, self-monitoring), `SENTRY_ENVIRONMENT`.
+All via environment variables. See `.env.example` for defaults.
+
+**Go module path:** `github.com/elmisi/ampulla` (used in import paths and `-ldflags` version injection).
+
+| Variable | Default | Description |
+|----------|---------|-------------|
+| `DATABASE_URL` | *required* | PostgreSQL connection string |
+| `AMPULLA_HOST` | `0.0.0.0` | Listen host |
+| `AMPULLA_PORT` | `8090` | Listen port |
+| `AMPULLA_LOG_LEVEL` | `info` | Log level (debug, info, warn, error) |
+| `ADMIN_USER` | | Admin username (enables admin UI + web/admin APIs) |
+| `ADMIN_PASSWORD` | | Admin password |
+| `SESSION_SECRET` | *auto-generated* | HMAC key for session cookies |
+| `AMPULLA_DOMAIN` | `ampulla.elmisi.com` | Domain used in generated DSN strings |
+| `SENTRY_DSN` | | Optional — self-monitoring DSN |
+| `SENTRY_ENVIRONMENT` | | Optional — environment tag for self-monitoring |
+| `POSTGRES_DB` | | Used by docker-compose db service |
+| `POSTGRES_USER` | | Used by docker-compose db service |
+| `POSTGRES_PASSWORD` | | Used by docker-compose db service |
 
 ## Notifications
 
