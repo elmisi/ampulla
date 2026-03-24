@@ -11,7 +11,7 @@ Built with Go and PostgreSQL. No external dependencies, no queue, no workers —
 - **Performance monitoring** — transactions and spans ingestion, with latency percentiles (P50/P75/P95/P99)
 - **Retention policy** — automatic cleanup of transactions older than 30 days
 - **ntfy notifications** — per-project push notifications on new issues and regressions
-- **Admin UI** — dark monospace dashboard at `/admin/` for managing organizations, projects, DSN keys, browsing issues, and viewing performance stats
+- **Admin UI** — dark monospace dashboard at `/admin/` for managing organizations, projects, DSN keys, browsing issues with structured stacktraces, and viewing performance stats
 - **Self-monitoring** — Ampulla reports its own errors to itself via Sentry Go SDK
 
 ## Quick Start
@@ -63,12 +63,16 @@ Notifications are sent for:
 - **New issues** — first time a fingerprint is seen
 - **Regressions** — a resolved issue receives a new event (auto-reopened to unresolved)
 
+### Environment Separation
+
+Use separate projects per environment (e.g. `myapp-prod`, `myapp-staging`, `myapp-dev`), each with its own DSN. This keeps issues, transactions, and performance metrics cleanly separated. The project filter is persisted across pages.
+
 ## Architecture
 
 ```
 cmd/ampulla/          Entrypoint, router, Sentry tracing, graceful shutdown
 internal/
-  admin/              Session auth, embedded admin UI (single HTML file)
+  admin/              Session auth, admin UI (index.html + static/ ES6 modules)
   api/admin/          Admin CRUD + performance stats API handlers
   api/ingest/         POST /api/{projectID}/envelope/ and /store/ (gzip/deflate)
   api/web/            Read-only Sentry-compatible API (/api/0/...)
@@ -94,6 +98,16 @@ The Performance page in the admin UI shows latency percentiles for each endpoint
 | **P99** | 99th percentile — only 1% is slower. Captures outliers and worst-case latency. |
 
 Values above 1s are highlighted in red, above 500ms in yellow.
+
+## Issue Detail View
+
+Clicking an issue shows a structured event display with:
+- **Issue header** — title, level/status badges, first/last seen, event count, resolve/reopen controls
+- **Event navigation** — prev/next buttons to browse all events in the issue
+- **Stacktrace tab** — collapsible stack frames with in-app frame highlighting
+- **Event Details tab** — structured tags, user, request, contexts, SDK, release info
+- **Breadcrumbs tab** — chronological trail of actions before the error
+- **Raw JSON tab** — full Sentry event payload as fallback
 
 ## API
 

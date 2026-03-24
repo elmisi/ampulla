@@ -57,7 +57,7 @@ Both Web API and Admin API are only mounted when `ADMIN_USER` + `ADMIN_PASSWORD`
 ### Key Packages
 
 - `cmd/ampulla/main.go` — entrypoint, router wiring, Sentry self-monitoring, graceful shutdown
-- `internal/admin/` — session auth (`auth.go`, HMAC-SHA256 cookies, login rate limiting) + embedded single-file admin UI (`ui.go` embeds `index.html`)
+- `internal/admin/` — session auth (`auth.go`, HMAC-SHA256 cookies, login rate limiting) + admin UI (`ui.go` embeds `index.html` + `static/` directory)
 - `internal/api/admin/` — admin CRUD handlers + performance stats endpoint
 - `internal/api/ingest/` — ingestion handlers (envelope + legacy store), gzip/deflate decompression
 - `internal/api/web/` — read-only Sentry-compatible API
@@ -76,7 +76,7 @@ Both Web API and Admin API are only mounted when `ADMIN_USER` + `ADMIN_PASSWORD`
 - Worker pool processing (4 workers, buffered channel) — adequate for 1k-5k events/month
 - JSONB columns preserve full Sentry event payloads
 - Migrations embedded in binary via `embed.FS` from `internal/store/migrations/`
-- Admin UI is a single `index.html` embedded in the Go binary
+- Admin UI is split into ES6 modules (`index.html` shell + `static/` directory with CSS, JS, page modules) embedded in the Go binary
 - Multi-stage Dockerfile: `golang:1.23-alpine` builder → `alpine:3.21` runtime
 - `docker-compose.yml` is the production compose (includes Traefik labels)
 - Batch span insert (single INSERT with N rows instead of N queries)
@@ -84,10 +84,12 @@ Both Web API and Admin API are only mounted when `ADMIN_USER` + `ADMIN_PASSWORD`
 - Self-monitoring: Ampulla reports its own errors to itself via Sentry Go SDK (project 3, `SENTRY_DSN` env var)
 - Sentry tracing middleware on admin/web API routes only (ingestion excluded to avoid loops)
 - Per-project ntfy notifications on new issues and regressions (resolved → new event)
+- Environment separation: use separate projects per environment (e.g. `myapp-prod`, `myapp-dev`) rather than environment-level filtering within a project
+- Project filter persisted in localStorage across Issues, Transactions, and Performance pages
 
 ## Database
 
-PostgreSQL 16. Tables: `organizations`, `projects` (with `ntfy_url`, `ntfy_topic`, `ntfy_token`), `project_keys`, `issues`, `events`, `transactions`, `spans`. Migrations in `internal/store/migrations/` (001 through 004). Migrations use `golang-migrate/migrate` with embedded `iofs` source.
+PostgreSQL 16. Tables: `organizations`, `projects` (with `ntfy_url`, `ntfy_topic`, `ntfy_token`), `project_keys`, `issues`, `events`, `transactions`, `spans`. Migrations in `internal/store/migrations/` (001 through 007). Migrations use `golang-migrate/migrate` with embedded `iofs` source.
 
 Key constraints: `events.issue_id` → `issues(id) ON DELETE CASCADE`, `spans.transaction_id` → `transactions(id) ON DELETE CASCADE`.
 
