@@ -285,8 +285,9 @@ func (h *Handler) DeleteProjectKey(w http.ResponseWriter, r *http.Request) {
 
 func (h *Handler) ListIssues(w http.ResponseWriter, r *http.Request) {
 	projectID, _ := strconv.ParseInt(r.URL.Query().Get("project"), 10, 64)
+	environment := r.URL.Query().Get("environment")
 	cursor, limit := parsePagination(r)
-	issues, err := h.db.AdminListIssues(r.Context(), projectID, cursor, limit)
+	issues, err := h.db.AdminListIssues(r.Context(), projectID, environment, cursor, limit)
 	if err != nil {
 		serverError(w, err)
 		return

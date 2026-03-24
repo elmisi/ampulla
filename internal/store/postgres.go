@@ -84,31 +84,31 @@ func (db *DB) GetProjectByKey(ctx context.Context, publicKey string) (*event.Pro
 
 // UpsertIssue creates or updates an issue based on fingerprint.
 // Returns the issue and whether it's new or a regression (was resolved).
-func (db *DB) UpsertIssue(ctx context.Context, projectID int64, fingerprint, title, level string, ts time.Time) (*event.UpsertResult, error) {
+func (db *DB) UpsertIssue(ctx context.Context, projectID int64, fingerprint, title, level, environment string, ts time.Time) (*event.UpsertResult, error) {
 	// CTE captures old status before the upsert modifies it.
 	// xmax = 0 in RETURNING means the row was INSERTed (new issue).
 	row := db.pool.QueryRow(ctx, `
 		WITH old AS (
-			SELECT status FROM issues WHERE project_id = $1 AND fingerprint = $3
+			SELECT status FROM issues WHERE project_id = $1 AND fingerprint = $3 AND environment = $5
 		)
-		INSERT INTO issues (project_id, title, fingerprint, level, first_seen, last_seen, event_count)
-		VALUES ($1, $2, $3, $4, $5, $5, 1)
-		ON CONFLICT (project_id, fingerprint) DO UPDATE SET
+		INSERT INTO issues (project_id, title, fingerprint, level, environment, first_seen, last_seen, event_count)
+		VALUES ($1, $2, $3, $4, $5, $6, $6, 1)
+		ON CONFLICT (project_id, fingerprint, environment) DO UPDATE SET
 			last_seen = GREATEST(issues.last_seen, EXCLUDED.last_seen),
 			event_count = issues.event_count + 1,
 			title = EXCLUDED.title,
 			status = CASE WHEN issues.status = 'resolved' THEN 'unresolved' ELSE issues.status END
-		RETURNING id, project_id, title, fingerprint, level, status, first_seen, last_seen, event_count,
+		RETURNING id, project_id, title, fingerprint, level, environment, status, first_seen, last_seen, event_count,
 			(xmax = 0) AS is_new,
 			COALESCE((SELECT status FROM old), '') AS old_status
-	`, projectID, title, fingerprint, level, ts)
+	`, projectID, title, fingerprint, level, environment, ts)
 
 	var issue event.Issue
 	var isNew bool
 	var oldStatus string
 	err := row.Scan(
 		&issue.ID, &issue.ProjectID, &issue.Title, &issue.Fingerprint,
-		&issue.Level, &issue.Status, &issue.FirstSeen, &issue.LastSeen, &issue.EventCount,
+		&issue.Level, &issue.Environment, &issue.Status, &issue.FirstSeen, &issue.LastSeen, &issue.EventCount,
 		&isNew, &oldStatus,
 	)
 	if err != nil {
@@ -125,10 +125,10 @@ func (db *DB) UpsertIssue(ctx context.Context, projectID int64, fingerprint, tit
 // InsertEvent stores an error event.
 func (db *DB) InsertEvent(ctx context.Context, e *event.Event) error {
 	_, err := db.pool.Exec(ctx, `
-		INSERT INTO events (event_id, project_id, issue_id, timestamp, platform, level, message, data)
-		VALUES ($1, $2, $3, $4, $5, $6, $7, $8)
+		INSERT INTO events (event_id, project_id, issue_id, timestamp, platform, level, environment, message, data)
+		VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9)
 		ON CONFLICT (project_id, event_id) DO NOTHING
-	`, e.EventID, e.ProjectID, e.IssueID, e.Timestamp, e.Platform, e.Level, e.Message, e.Data)
+	`, e.EventID, e.ProjectID, e.IssueID, e.Timestamp, e.Platform, e.Level, e.Environment, e.Message, e.Data)
 	if err != nil {
 		return fmt.Errorf("insert event: %w", err)
 	}
@@ -262,7 +262,7 @@ func (db *DB) ListIssues(ctx context.Context, orgSlug, projectSlug string, curso
 		limit = 25
 	}
 	rows, err := db.pool.Query(ctx, `
-		SELECT i.id, i.project_id, i.title, i.fingerprint, i.level, i.status,
+		SELECT i.id, i.project_id, i.title, i.fingerprint, i.level, i.environment, i.status,
 		       i.first_seen, i.last_seen, i.event_count
 		FROM issues i
 		JOIN projects p ON p.id = i.project_id
@@ -280,7 +280,7 @@ func (db *DB) ListIssues(ctx context.Context, orgSlug, projectSlug string, curso
 	for rows.Next() {
 		var i event.Issue
 		if err := rows.Scan(&i.ID, &i.ProjectID, &i.Title, &i.Fingerprint, &i.Level,
-			&i.Status, &i.FirstSeen, &i.LastSeen, &i.EventCount); err != nil {
+			&i.Environment, &i.Status, &i.FirstSeen, &i.LastSeen, &i.EventCount); err != nil {
 			return nil, err
 		}
 		issues = append(issues, i)
@@ -294,7 +294,7 @@ func (db *DB) ListEventsByIssue(ctx context.Context, issueID, cursor int64, limi
 		limit = 25
 	}
 	rows, err := db.pool.Query(ctx, `
-		SELECT id, event_id, project_id, issue_id, timestamp, platform, level, message, data, received_at
+		SELECT id, event_id, project_id, issue_id, timestamp, platform, level, environment, message, data, received_at
 		FROM events
 		WHERE issue_id = $1 AND id > $2
 		ORDER BY timestamp DESC
@@ -310,7 +310,7 @@ func (db *DB) ListEventsByIssue(ctx context.Context, issueID, cursor int64, limi
 		var e event.Event
 		var platform, level, message *string
 		if err := rows.Scan(&e.ID, &e.EventID, &e.ProjectID, &e.IssueID, &e.Timestamp,
-			&platform, &level, &message, &e.Data, &e.ReceivedAt); err != nil {
+			&platform, &level, &e.Environment, &message, &e.Data, &e.ReceivedAt); err != nil {
 			return nil, err
 		}
 		if platform != nil {
@@ -527,10 +527,10 @@ func (db *DB) DeleteProjectKey(ctx context.Context, id int64) error {
 func (db *DB) GetIssue(ctx context.Context, id int64) (*event.Issue, error) {
 	var i event.Issue
 	err := db.pool.QueryRow(ctx,
-		`SELECT id, project_id, title, fingerprint, level, status, first_seen, last_seen, event_count
+		`SELECT id, project_id, title, fingerprint, level, environment, status, first_seen, last_seen, event_count
 		 FROM issues WHERE id = $1`, id).
 		Scan(&i.ID, &i.ProjectID, &i.Title, &i.Fingerprint, &i.Level,
-			&i.Status, &i.FirstSeen, &i.LastSeen, &i.EventCount)
+			&i.Environment, &i.Status, &i.FirstSeen, &i.LastSeen, &i.EventCount)
 	if err != nil {
 		return nil, err
 	}
@@ -538,19 +538,26 @@ func (db *DB) GetIssue(ctx context.Context, id int64) (*event.Issue, error) {
 }
 
 // AdminListIssues returns issues, optionally filtered by project ID.
-func (db *DB) AdminListIssues(ctx context.Context, projectID, cursor int64, limit int) ([]event.Issue, error) {
+func (db *DB) AdminListIssues(ctx context.Context, projectID int64, environment string, cursor int64, limit int) ([]event.Issue, error) {
 	if limit <= 0 || limit > 100 {
 		limit = 25
 	}
-	query := `SELECT id, project_id, title, fingerprint, level, status, first_seen, last_seen, event_count FROM issues`
+	query := `SELECT id, project_id, title, fingerprint, level, environment, status, first_seen, last_seen, event_count FROM issues WHERE true`
 	var args []any
+	argN := 1
 	if projectID > 0 {
-		query += ` WHERE project_id = $1 AND id > $2 ORDER BY last_seen DESC LIMIT $3`
-		args = []any{projectID, cursor, limit}
-	} else {
-		query += ` WHERE id > $1 ORDER BY last_seen DESC LIMIT $2`
-		args = []any{cursor, limit}
+		query += fmt.Sprintf(` AND project_id = $%d`, argN)
+		args = append(args, projectID)
+		argN++
 	}
+	if environment != "" {
+		query += fmt.Sprintf(` AND environment = $%d`, argN)
+		args = append(args, environment)
+		argN++
+	}
+	query += fmt.Sprintf(` AND id > $%d ORDER BY last_seen DESC LIMIT $%d`, argN, argN+1)
+	args = append(args, cursor, limit)
+
 	rows, err := db.pool.Query(ctx, query, args...)
 	if err != nil {
 		return nil, err
@@ -561,7 +568,7 @@ func (db *DB) AdminListIssues(ctx context.Context, projectID, cursor int64, limi
 	for rows.Next() {
 		var i event.Issue
 		if err := rows.Scan(&i.ID, &i.ProjectID, &i.Title, &i.Fingerprint, &i.Level,
-			&i.Status, &i.FirstSeen, &i.LastSeen, &i.EventCount); err != nil {
+			&i.Environment, &i.Status, &i.FirstSeen, &i.LastSeen, &i.EventCount); err != nil {
 			return nil, err
 		}
 		issues = append(issues, i)

@@ -23,7 +23,7 @@ const (
 
 // Store defines the database operations needed by the processor.
 type Store interface {
-	UpsertIssue(ctx context.Context, projectID int64, fingerprint, title, level string, ts time.Time) (*UpsertResult, error)
+	UpsertIssue(ctx context.Context, projectID int64, fingerprint, title, level, environment string, ts time.Time) (*UpsertResult, error)
 	InsertEvent(ctx context.Context, e *Event) error
 	InsertTransaction(ctx context.Context, t *Transaction) (int64, error)
 	InsertSpans(ctx context.Context, txnID int64, traceID uuid.UUID, spans []Span) error
@@ -182,12 +182,13 @@ func (p *Processor) Process(ctx context.Context, projectID int64, env *Envelope,
 
 func (p *Processor) processEvent(ctx context.Context, projectID int64, payload json.RawMessage) error {
 	var raw struct {
-		EventID   string `json:"event_id"`
-		Timestamp any    `json:"timestamp"`
-		Platform  string `json:"platform"`
-		Level     string `json:"level"`
-		Message   string `json:"message"`
-		LogEntry  struct {
+		EventID     string `json:"event_id"`
+		Timestamp   any    `json:"timestamp"`
+		Platform    string `json:"platform"`
+		Level       string `json:"level"`
+		Environment string `json:"environment"`
+		Message     string `json:"message"`
+		LogEntry    struct {
 			Message string `json:"message"`
 		} `json:"logentry"`
 	}
@@ -214,20 +215,21 @@ func (p *Processor) processEvent(ctx context.Context, projectID int64, payload j
 	fingerprint := grouping.Compute(payload)
 	title := grouping.Title(payload)
 
-	result, err := p.store.UpsertIssue(ctx, projectID, fingerprint, title, level, ts)
+	result, err := p.store.UpsertIssue(ctx, projectID, fingerprint, title, level, raw.Environment, ts)
 	if err != nil {
 		return err
 	}
 
 	e := &Event{
-		EventID:   eventID,
-		ProjectID: projectID,
-		IssueID:   result.Issue.ID,
-		Timestamp: ts,
-		Platform:  raw.Platform,
-		Level:     level,
-		Message:   message,
-		Data:      payload,
+		EventID:     eventID,
+		ProjectID:   projectID,
+		IssueID:     result.Issue.ID,
+		Timestamp:   ts,
+		Platform:    raw.Platform,
+		Level:       level,
+		Environment: raw.Environment,
+		Message:     message,
+		Data:        payload,
 	}
 
 	if err := p.store.InsertEvent(ctx, e); err != nil {

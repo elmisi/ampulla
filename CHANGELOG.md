@@ -1,3 +1,11 @@
+## [0.3.0] - 2026-03-24
+
+### Added
+- Environment-based issue separation: same error in dev and prod creates separate issues
+- Environment column on issues and events tables (migration 006)
+- Environment filter input on issues list page
+- Environment badge on issue detail header
+
 ## [0.2.0] - 2026-03-24
 
 ### Added
