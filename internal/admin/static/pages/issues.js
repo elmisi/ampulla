@@ -15,10 +15,6 @@ router.on('/issues', async () => {
   projects.forEach(p => sel.appendChild(el('option', { value: String(p.id) }, p.name)));
   sel.onchange = () => loadIssues();
   toolbar.appendChild(sel);
-  const envInput = el('input', { type: 'text', placeholder: 'Filter by environment...', style: 'width:200px' });
-  let envTimer;
-  envInput.oninput = () => { clearTimeout(envTimer); envTimer = setTimeout(() => loadIssues(), 300); };
-  toolbar.appendChild(envInput);
   frag.appendChild(toolbar);
 
   const container = el('div');
@@ -27,10 +23,7 @@ router.on('/issues', async () => {
   async function loadIssues() {
     container.innerHTML = '';
     try {
-      const params = [];
-      if (sel.value) params.push('project=' + sel.value);
-      if (envInput.value.trim()) params.push('environment=' + encodeURIComponent(envInput.value.trim()));
-      const q = params.length ? '?' + params.join('&') : '';
+      const q = sel.value ? '?project=' + sel.value : '';
       const issues = await api.get('/issues' + q);
       if (!issues || issues.length === 0) {
         container.appendChild(el('div', { className: 'empty' }, 'No issues'));
@@ -38,15 +31,14 @@ router.on('/issues', async () => {
       }
       const t = el('table');
       t.appendChild(el('thead', null, el('tr', null,
-        el('th', null, 'Issue'), el('th', null, 'Level'), el('th', null, 'Env'),
-        el('th', null, 'Status'), el('th', null, 'Events'), el('th', null, 'Last Seen'), el('th', null, 'Actions')
+        el('th', null, 'Issue'), el('th', null, 'Level'), el('th', null, 'Status'),
+        el('th', null, 'Events'), el('th', null, 'Last Seen'), el('th', null, 'Actions')
       )));
       const tb = el('tbody');
       issues.forEach(i => {
         tb.appendChild(el('tr', null,
           el('td', null, el('a', { href: '#/issues/' + i.id }, i.title)),
           el('td', null, levelBadge(i.level)),
-          el('td', { style: 'color:var(--muted)' }, i.environment || '-'),
           el('td', null, statusBadge(i.status)),
           el('td', { style: 'color:var(--muted)' }, String(i.count)),
           el('td', { style: 'color:var(--muted)' }, timeAgo(i.lastSeen)),
@@ -95,15 +87,7 @@ router.on('/issues/:id', async (params) => {
     const meta = el('div', { className: 'issue-meta' });
     meta.append(
       levelBadge(issue.level),
-      statusBadge(issue.status)
-    );
-    if (issue.environment) {
-      meta.append(
-        el('span', { className: 'sep' }, '\u00b7'),
-        el('span', { className: 'badge badge-info' }, issue.environment)
-      );
-    }
-    meta.append(
+      statusBadge(issue.status),
       el('span', { className: 'sep' }, '\u00b7'),
       el('span', null, 'First seen ' + timeAgo(issue.firstSeen)),
       el('span', { className: 'sep' }, '\u00b7'),

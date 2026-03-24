@@ -1,10 +1,9 @@
 ## [0.3.0] - 2026-03-24
 
-### Added
-- Environment-based issue separation: same error in dev and prod creates separate issues
-- Environment column on issues and events tables (migration 006)
-- Environment filter input on issues list page
-- Environment badge on issue detail header
+### Removed
+- Reverted environment-based issue separation (migration 007 removes environment columns)
+- Environment is still visible per-event in the Event Details tab from JSONB payload
+- Recommended approach: create separate projects per environment (e.g. myapp-prod, myapp-dev)
 
 ## [0.2.0] - 2026-03-24
 

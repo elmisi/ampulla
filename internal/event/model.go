@@ -43,7 +43,6 @@ type Issue struct {
 	Title       string    `json:"title"`
 	Fingerprint string    `json:"culprit"`
 	Level       string    `json:"level"`
-	Environment string    `json:"environment"`
 	Status      string    `json:"status"`
 	FirstSeen   time.Time `json:"firstSeen"`
 	LastSeen    time.Time `json:"lastSeen"`
@@ -51,17 +50,16 @@ type Issue struct {
 }
 
 type Event struct {
-	ID          int64           `json:"id"`
-	EventID     uuid.UUID       `json:"eventID"`
-	ProjectID   int64           `json:"projectID"`
-	IssueID     int64           `json:"groupID"`
-	Timestamp   time.Time       `json:"dateCreated"`
-	Platform    string          `json:"platform,omitempty"`
-	Level       string          `json:"level,omitempty"`
-	Environment string          `json:"environment,omitempty"`
-	Message     string          `json:"message,omitempty"`
-	Data        json.RawMessage `json:"context"`
-	ReceivedAt  time.Time       `json:"dateReceived"`
+	ID         int64           `json:"id"`
+	EventID    uuid.UUID       `json:"eventID"`
+	ProjectID  int64           `json:"projectID"`
+	IssueID    int64           `json:"groupID"`
+	Timestamp  time.Time       `json:"dateCreated"`
+	Platform   string          `json:"platform,omitempty"`
+	Level      string          `json:"level,omitempty"`
+	Message    string          `json:"message,omitempty"`
+	Data       json.RawMessage `json:"context"`
+	ReceivedAt time.Time       `json:"dateReceived"`
 }
 
 type Transaction struct {
