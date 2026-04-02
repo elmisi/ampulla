@@ -61,22 +61,25 @@ async function renderProjectForm(proj) {
   // ntfy notification config
   if (isEdit) {
     form.appendChild(el('h3', { style: 'margin-top:16px;margin-bottom:8px;color:var(--muted)' }, 'Notifications (ntfy)'));
-    const ntfyRow = el('div', { className: 'form-row' });
-    const nug = el('div', { className: 'form-group' }, el('label', null, 'ntfy Server URL'));
-    const nui = el('input', { type: 'text', value: proj?.ntfyUrl || '', placeholder: 'https://n.elmisi.com' });
-    nug.appendChild(nui);
-    const ntg = el('div', { className: 'form-group' }, el('label', null, 'Topic'));
-    const nti = el('input', { type: 'text', value: proj?.ntfyTopic || '', placeholder: 'my-project-errors' });
-    ntg.appendChild(nti);
-    ntfyRow.append(nug, ntg);
-    form.appendChild(ntfyRow);
-    const nkg = el('div', { className: 'form-group' }, el('label', null, 'Token (optional)'));
-    const nki = el('input', { type: 'password', value: proj?.ntfyToken || '', placeholder: 'Bearer token' });
-    nkg.appendChild(nki);
-    form.appendChild(nkg);
-    form._ntfyUrl = nui;
-    form._ntfyTopic = nti;
-    form._ntfyToken = nki;
+    const ntfyGroup = el('div', { className: 'form-group' });
+    const ntfyLabel = el('div', { style: 'display:flex;align-items:center;gap:8px' });
+    ntfyLabel.appendChild(el('label', null, 'Ntfy Configuration'));
+    ntfyLabel.appendChild(el('a', { href: '#/ntfy', style: 'font-size:12px' }, 'Manage configurations'));
+    ntfyGroup.appendChild(ntfyLabel);
+    const ntfySelect = el('select');
+    ntfySelect.appendChild(el('option', { value: '' }, 'None'));
+    try {
+      const configs = await api.get('/ntfy-configs');
+      configs.forEach(c => {
+        const cid = String(c.ID || c.id);
+        const opt = el('option', { value: cid }, (c.Name || c.name) + ' (' + (c.Topic || c.topic) + ')');
+        if (proj.ntfyConfigId && String(proj.ntfyConfigId) === cid) opt.selected = true;
+        ntfySelect.appendChild(opt);
+      });
+    } catch {}
+    ntfyGroup.appendChild(ntfySelect);
+    form.appendChild(ntfyGroup);
+    form._ntfyConfigId = ntfySelect;
 
     // SDK version tracking
     form.appendChild(el('h3', { style: 'margin-top:16px;margin-bottom:8px;color:var(--muted)' }, 'SDK Version'));
@@ -100,9 +103,10 @@ async function renderProjectForm(proj) {
     e.preventDefault();
     try {
       if (isEdit) {
+        const ntfyVal = form._ntfyConfigId?.value;
         await api.put('/projects/' + proj.id, {
           name: ni.value, slug: si.value, platform: pi.value,
-          ntfyUrl: form._ntfyUrl?.value || '', ntfyTopic: form._ntfyTopic?.value || '', ntfyToken: form._ntfyToken?.value || '',
+          ntfyConfigId: ntfyVal ? parseInt(ntfyVal) : null,
           knownSdkVersion: form._knownSdkVersion?.value || ''
         });
         toast('Project updated');

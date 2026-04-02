@@ -18,6 +18,8 @@ import (
 	"github.com/elmisi/ampulla/internal/auth"
 	"github.com/elmisi/ampulla/internal/config"
 	"github.com/elmisi/ampulla/internal/event"
+	"github.com/elmisi/ampulla/internal/notify"
+	"github.com/elmisi/ampulla/internal/observe"
 	"github.com/elmisi/ampulla/internal/store"
 	"github.com/elmisi/ampulla/internal/version"
 	"github.com/getsentry/sentry-go"
@@ -64,6 +66,8 @@ func main() {
 		os.Exit(1)
 	}
 
+	ntfySender := notify.NewHTTPNtfySender()
+
 	processor := event.NewProcessor(db, cfg.Domain)
 	authMiddleware := auth.NewMiddleware(db)
 	ingestHandler := ingest.NewHandler(processor)
@@ -71,8 +75,10 @@ func main() {
 	defer processor.Close()
 
 	r := chi.NewRouter()
+	r.Use(panicObserver)
 	r.Use(middleware.Recoverer)
 	r.Use(middleware.RealIP)
+	r.Use(requestLogger)
 
 	r.Get("/health", func(w http.ResponseWriter, r *http.Request) {
 		w.WriteHeader(http.StatusOK)
@@ -97,7 +103,7 @@ func main() {
 	// Admin UI + API + Web API (all require admin to be enabled)
 	if cfg.AdminEnabled() {
 		adminAuth := admin.NewAuth(cfg.AdminUser, cfg.AdminPassword, cfg.SessionSecret)
-		adminHandler := adminapi.NewHandler(db, cfg.Domain)
+		adminHandler := adminapi.NewHandler(db, cfg.Domain, ntfySender)
 
 		// Web API (read-only, session-authenticated)
 		r.Route("/api/0", func(r chi.Router) {
@@ -148,6 +154,12 @@ func main() {
 				r.Get("/transactions/{id}", adminHandler.GetTransaction)
 				r.Get("/transactions/{id}/spans", adminHandler.ListTransactionSpans)
 				r.Get("/performance", adminHandler.Performance)
+
+				r.Get("/ntfy-configs", adminHandler.ListNtfyConfigs)
+				r.Post("/ntfy-configs", adminHandler.CreateNtfyConfig)
+				r.Put("/ntfy-configs/{id}", adminHandler.UpdateNtfyConfig)
+				r.Delete("/ntfy-configs/{id}", adminHandler.DeleteNtfyConfig)
+				r.Post("/ntfy-configs/{id}/test", adminHandler.TestNtfyConfig)
 			})
 		})
 		slog.Info("admin UI enabled", "path", "/admin/")
@@ -224,6 +236,43 @@ type statusWriter struct {
 func (w *statusWriter) WriteHeader(code int) {
 	w.status = code
 	w.ResponseWriter.WriteHeader(code)
+}
+
+// panicObserver captures panics to slog+Sentry before chi's Recoverer turns them into 500s.
+func panicObserver(next http.Handler) http.Handler {
+	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		defer observe.RecoverPanic(r.Context(), "http", "path", r.URL.Path, "method", r.Method)
+		next.ServeHTTP(w, r)
+	})
+}
+
+// requestLogger logs HTTP requests with appropriate log levels.
+func requestLogger(next http.Handler) http.Handler {
+	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		// Skip /health to reduce noise
+		if r.URL.Path == "/health" {
+			next.ServeHTTP(w, r)
+			return
+		}
+
+		start := time.Now()
+		ww := &statusWriter{ResponseWriter: w, status: 200}
+		next.ServeHTTP(ww, r)
+
+		duration := time.Since(start)
+		attrs := []any{
+			"method", r.Method,
+			"path", r.URL.Path,
+			"status", ww.status,
+			"duration", duration.String(),
+			"remote_ip", r.RemoteAddr,
+		}
+		if ww.status >= 400 {
+			slog.Info("http request", attrs...)
+		} else {
+			slog.Debug("http request", attrs...)
+		}
+	})
 }
 
 func httpStatus(code int) sentry.SpanStatus {

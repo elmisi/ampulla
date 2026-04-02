@@ -1,24 +1,28 @@
 package admin
 
 import (
+	"context"
 	"encoding/json"
 	"fmt"
 	"log/slog"
 	"net/http"
 	"strconv"
+	"time"
 
 	"github.com/elmisi/ampulla/internal/event"
+	"github.com/elmisi/ampulla/internal/notify"
 	"github.com/elmisi/ampulla/internal/store"
 	"github.com/go-chi/chi/v5"
 )
 
 type Handler struct {
-	db     *store.DB
-	domain string
+	db         *store.DB
+	domain     string
+	ntfySender notify.NtfySender
 }
 
-func NewHandler(db *store.DB, domain string) *Handler {
-	return &Handler{db: db, domain: domain}
+func NewHandler(db *store.DB, domain string, ntfySender notify.NtfySender) *Handler {
+	return &Handler{db: db, domain: domain, ntfySender: ntfySender}
 }
 
 // --- Organizations ---
@@ -145,9 +149,7 @@ func (h *Handler) UpdateProject(w http.ResponseWriter, r *http.Request) {
 		Name            string `json:"name"`
 		Slug            string `json:"slug"`
 		Platform        string `json:"platform"`
-		NtfyURL         string `json:"ntfyUrl"`
-		NtfyTopic       string `json:"ntfyTopic"`
-		NtfyToken       string `json:"ntfyToken"`
+		NtfyConfigID    *int64 `json:"ntfyConfigId"`
 		KnownSDKVersion string `json:"knownSdkVersion"`
 	}
 	if err := json.NewDecoder(r.Body).Decode(&req); err != nil || req.Name == "" || req.Slug == "" {
@@ -158,7 +160,7 @@ func (h *Handler) UpdateProject(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, `{"error":"name max 255 chars, slug max 64 chars"}`, http.StatusBadRequest)
 		return
 	}
-	if err := h.db.UpdateProject(r.Context(), id, req.Name, req.Slug, req.Platform, req.NtfyURL, req.NtfyTopic, req.NtfyToken, req.KnownSDKVersion); err != nil {
+	if err := h.db.UpdateProject(r.Context(), id, req.Name, req.Slug, req.Platform, req.NtfyConfigID, req.KnownSDKVersion); err != nil {
 		serverError(w, err)
 		return
 	}
@@ -443,6 +445,106 @@ func (h *Handler) Performance(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	writeJSON(w, http.StatusOK, stats)
+}
+
+// --- Ntfy Configurations ---
+
+func (h *Handler) ListNtfyConfigs(w http.ResponseWriter, r *http.Request) {
+	configs, err := h.db.ListNtfyConfigs(r.Context())
+	if err != nil {
+		serverError(w, err)
+		return
+	}
+	if configs == nil {
+		configs = []store.NtfyConfigWithCount{}
+	}
+	writeJSON(w, http.StatusOK, configs)
+}
+
+func (h *Handler) CreateNtfyConfig(w http.ResponseWriter, r *http.Request) {
+	var req struct {
+		Name  string `json:"name"`
+		URL   string `json:"url"`
+		Topic string `json:"topic"`
+		Token string `json:"token"`
+	}
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil || req.Name == "" || req.URL == "" || req.Topic == "" {
+		http.Error(w, `{"error":"name, url, and topic required"}`, http.StatusBadRequest)
+		return
+	}
+	cfg, err := h.db.CreateNtfyConfig(r.Context(), req.Name, req.URL, req.Topic, req.Token)
+	if err != nil {
+		serverError(w, err)
+		return
+	}
+	writeJSON(w, http.StatusCreated, cfg)
+}
+
+func (h *Handler) UpdateNtfyConfig(w http.ResponseWriter, r *http.Request) {
+	id, err := paramInt64(r, "id")
+	if err != nil {
+		http.Error(w, `{"error":"invalid id"}`, http.StatusBadRequest)
+		return
+	}
+	var req struct {
+		Name  string `json:"name"`
+		URL   string `json:"url"`
+		Topic string `json:"topic"`
+		Token string `json:"token"`
+	}
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil || req.Name == "" || req.URL == "" || req.Topic == "" {
+		http.Error(w, `{"error":"name, url, and topic required"}`, http.StatusBadRequest)
+		return
+	}
+	if err := h.db.UpdateNtfyConfig(r.Context(), id, req.Name, req.URL, req.Topic, req.Token); err != nil {
+		serverError(w, err)
+		return
+	}
+	writeJSON(w, http.StatusOK, map[string]string{"ok": "true"})
+}
+
+func (h *Handler) DeleteNtfyConfig(w http.ResponseWriter, r *http.Request) {
+	id, err := paramInt64(r, "id")
+	if err != nil {
+		http.Error(w, `{"error":"invalid id"}`, http.StatusBadRequest)
+		return
+	}
+	if err := h.db.DeleteNtfyConfig(r.Context(), id); err != nil {
+		serverError(w, err)
+		return
+	}
+	writeJSON(w, http.StatusOK, map[string]string{"ok": "true"})
+}
+
+func (h *Handler) TestNtfyConfig(w http.ResponseWriter, r *http.Request) {
+	id, err := paramInt64(r, "id")
+	if err != nil {
+		http.Error(w, `{"error":"invalid id"}`, http.StatusBadRequest)
+		return
+	}
+	cfg, err := h.db.GetNtfyConfig(r.Context(), id)
+	if err != nil {
+		serverError(w, err)
+		return
+	}
+	ctx, cancel := context.WithTimeout(r.Context(), 10*time.Second)
+	defer cancel()
+
+	statusCode, body, err := h.ntfySender.Send(ctx, *cfg, notify.NtfyPayload{
+		Title: "Ampulla test notification",
+		Body:  fmt.Sprintf("Configuration '%s' is working correctly.", cfg.Name),
+	})
+	if err != nil {
+		slog.Warn("ntfy test failed", "config", cfg.Name, "error", err)
+		writeJSON(w, http.StatusOK, map[string]any{"success": false, "error": err.Error()})
+		return
+	}
+	if statusCode >= 400 {
+		slog.Warn("ntfy test returned error", "config", cfg.Name, "status", statusCode)
+		writeJSON(w, http.StatusOK, map[string]any{"success": false, "status": statusCode, "body": body})
+		return
+	}
+	writeJSON(w, http.StatusOK, map[string]any{"success": true, "status": statusCode})
 }
 
 // --- Helpers ---
