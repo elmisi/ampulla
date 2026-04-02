@@ -7,14 +7,15 @@ import (
 )
 
 type Config struct {
-	Host          string
-	Port          string
-	DatabaseURL   string
-	LogLevel      string
-	AdminUser     string
-	AdminPassword string
-	SessionSecret []byte
-	Domain        string
+	Host            string
+	Port            string
+	DatabaseURL     string
+	LogLevel        string
+	AdminUser       string
+	AdminPassword   string
+	SessionSecret   []byte
+	Domain          string
+	FrontendSentryDSN string
 }
 
 func Load() (*Config, error) {
@@ -25,7 +26,8 @@ func Load() (*Config, error) {
 		LogLevel:      getEnv("AMPULLA_LOG_LEVEL", "info"),
 		AdminUser:     os.Getenv("ADMIN_USER"),
 		AdminPassword: os.Getenv("ADMIN_PASSWORD"),
-		Domain:        getEnv("AMPULLA_DOMAIN", "ampulla.elmisi.com"),
+		Domain:            getEnv("AMPULLA_DOMAIN", "ampulla.elmisi.com"),
+		FrontendSentryDSN: os.Getenv("SENTRY_FRONTEND_DSN"),
 	}
 
 	if cfg.DatabaseURL == "" {

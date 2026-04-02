@@ -11,14 +11,17 @@ import './pages/issues.js';
 import './pages/transactions.js';
 import './pages/performance.js';
 
+// Cached version info (fetched once at init)
+let versionInfo = null;
+
 export function render(content, showNav = true) {
   const app = document.getElementById('app');
   app.innerHTML = '';
   if (showNav) {
     const logoDiv = el('div', { className: 'logo' }, 'ampulla');
-    fetch('/api/version').then(r => r.json()).then(d => {
-      logoDiv.appendChild(el('span', { style: 'font-size:11px;color:var(--muted);font-weight:400;margin-left:8px' }, 'v' + d.version));
-    }).catch(() => {});
+    if (versionInfo?.version) {
+      logoDiv.appendChild(el('span', { style: 'font-size:11px;color:var(--muted);font-weight:400;margin-left:8px' }, 'v' + versionInfo.version));
+    }
     const n = el('nav', null,
       logoDiv,
       navLink('/', 'Dashboard'),
@@ -45,6 +48,20 @@ function navLink(hash, label) {
 
 // Init
 (async function init() {
+  // Fetch version + Sentry DSN (unauthenticated endpoint)
+  try {
+    const res = await fetch('/api/version');
+    versionInfo = await res.json();
+    if (versionInfo.sentryDsn && window.Sentry) {
+      window.Sentry.init({
+        dsn: versionInfo.sentryDsn,
+        release: 'ampulla-admin@' + (versionInfo.version || 'unknown'),
+        integrations: [window.Sentry.browserTracingIntegration()],
+        tracesSampleRate: 1.0,
+      });
+    }
+  } catch {}
+
   try {
     await api.get('/me');
     if (!location.hash || location.hash === '#/login') location.hash = '#/';

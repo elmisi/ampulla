@@ -2,6 +2,7 @@ package main
 
 import (
 	"context"
+	"encoding/json"
 	"fmt"
 	"log/slog"
 	"net/http"
@@ -79,7 +80,11 @@ func main() {
 	})
 	r.Get("/api/version", func(w http.ResponseWriter, r *http.Request) {
 		w.Header().Set("Content-Type", "application/json")
-		w.Write([]byte(`{"version":"` + version.String() + `"}`))
+		resp := map[string]string{"version": version.String()}
+		if cfg.FrontendSentryDSN != "" {
+			resp["sentryDsn"] = cfg.FrontendSentryDSN
+		}
+		json.NewEncoder(w).Encode(resp)
 	})
 
 	// Ingestion endpoints (auth required)

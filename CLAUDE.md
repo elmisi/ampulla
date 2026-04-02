@@ -115,7 +115,8 @@ All via environment variables. See `.env.example` for defaults.
 | `ADMIN_PASSWORD` | | Admin password |
 | `SESSION_SECRET` | *auto-generated* | HMAC key for session cookies |
 | `AMPULLA_DOMAIN` | `ampulla.elmisi.com` | Domain used in generated DSN strings |
-| `SENTRY_DSN` | | Optional — self-monitoring DSN |
+| `SENTRY_DSN` | | Optional — self-monitoring DSN (Go backend) |
+| `SENTRY_FRONTEND_DSN` | | Optional — self-monitoring DSN for admin UI (Browser SDK) |
 | `SENTRY_ENVIRONMENT` | | Optional — environment tag for self-monitoring |
 | `POSTGRES_DB` | | Used by docker-compose db service |
 | `POSTGRES_USER` | | Used by docker-compose db service |
