@@ -1,3 +1,13 @@
+## [0.4.0] - 2026-04-02
+
+### Added
+- Sentry Browser SDK integration for admin UI error and performance tracking
+- New `SENTRY_FRONTEND_DSN` env var to configure frontend self-monitoring
+- `/api/version` endpoint now includes `sentryDsn` when configured
+
+### Fixed
+- `extractSentryClient` now reads `sentry_client` from query params (Browser SDKs use this instead of `X-Sentry-Auth` header)
+
 ## [0.3.0] - 2026-03-24
 
 ### Removed
