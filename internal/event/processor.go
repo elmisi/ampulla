@@ -5,12 +5,16 @@ import (
 	"encoding/json"
 	"fmt"
 	"log/slog"
-	"net/http"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"time"
 
+	"github.com/getsentry/sentry-go"
+
 	"github.com/elmisi/ampulla/internal/grouping"
+	"github.com/elmisi/ampulla/internal/notify"
+	"github.com/elmisi/ampulla/internal/observe"
 	"github.com/google/uuid"
 )
 
@@ -28,7 +32,7 @@ type Store interface {
 	InsertTransaction(ctx context.Context, t *Transaction) (int64, error)
 	InsertSpans(ctx context.Context, txnID int64, traceID uuid.UUID, spans []Span) error
 	DeleteOldTransactions(ctx context.Context, before time.Time) (int64, error)
-	GetProjectNtfyConfig(ctx context.Context, projectID int64) (projectName, ntfyURL, ntfyTopic, ntfyToken string, err error)
+	GetProjectNtfyConfig(ctx context.Context, projectID int64) (projectName string, cfg *notify.NtfyConfig, err error)
 	UpdateLastSDKVersion(ctx context.Context, projectID int64, sdkVersion string) error
 }
 
@@ -39,21 +43,27 @@ type job struct {
 }
 
 type Processor struct {
-	store  Store
-	domain string
-	queue  chan job
-	wg     sync.WaitGroup
-	done   chan struct{}
-	ticker *time.Ticker
+	store      Store
+	domain     string
+	ntfySender notify.NtfySender
+	queue      chan job
+	wg         sync.WaitGroup
+	done       chan struct{}
+	ticker     *time.Ticker
+
+	activeWorkers  atomic.Int64
+	activeNtfy     atomic.Int64
+	queueDropCount atomic.Int64
 }
 
 func NewProcessor(s Store, domain string) *Processor {
 	p := &Processor{
-		store:  s,
-		domain: domain,
-		queue:  make(chan job, queueSize),
-		done:   make(chan struct{}),
-		ticker: time.NewTicker(cleanupInterval),
+		store:      s,
+		domain:     domain,
+		ntfySender: notify.NewHTTPNtfySender(),
+		queue:      make(chan job, queueSize),
+		done:       make(chan struct{}),
+		ticker:     time.NewTicker(cleanupInterval),
 	}
 	for i := 0; i < workerCount; i++ {
 		p.wg.Add(1)
@@ -67,25 +77,57 @@ func NewProcessor(s Store, domain string) *Processor {
 func (p *Processor) worker() {
 	defer p.wg.Done()
 	for j := range p.queue {
-		p.Process(context.Background(), j.projectID, j.env, j.sdkClient)
+		p.activeWorkers.Add(1)
+		p.safeProcess(j)
+		p.activeWorkers.Add(-1)
 	}
 }
 
-// Enqueue submits a job for async processing. Drops the job if the queue is full.
-func (p *Processor) Enqueue(projectID int64, env *Envelope, sdkClient string) {
+func (p *Processor) safeProcess(j job) {
+	defer observe.RecoverPanic(context.Background(), "worker", "project", j.projectID)
+	p.Process(context.Background(), j.projectID, j.env, j.sdkClient)
+}
+
+// Enqueue submits a job for async processing. Returns false if the queue is full.
+func (p *Processor) Enqueue(projectID int64, env *Envelope, sdkClient string) bool {
 	select {
 	case p.queue <- job{projectID: projectID, env: env, sdkClient: sdkClient}:
+		return true
 	default:
 		slog.Warn("event queue full, dropping event", "project", projectID, "event", env.Header.EventID)
+		count := p.queueDropCount.Add(1)
+		observe.Throttled("queue_full", time.Minute, func() {
+			sentry.CaptureMessage(fmt.Sprintf("event queue full: %d drops", count))
+		})
+		return false
 	}
 }
 
-// Close shuts down the worker pool and cleanup loop, waits for completion.
+// Close shuts down the worker pool and cleanup loop, waits for completion
+// with a 15-second timeout.
 func (p *Processor) Close() {
 	p.ticker.Stop()
 	close(p.done)
 	close(p.queue)
-	p.wg.Wait()
+
+	done := make(chan struct{})
+	go func() {
+		p.wg.Wait()
+		close(done)
+	}()
+
+	select {
+	case <-done:
+		slog.Info("processor shutdown complete")
+	case <-time.After(15 * time.Second):
+		slog.Error("processor shutdown timed out",
+			"queue_len", len(p.queue),
+			"active_workers", p.activeWorkers.Load(),
+			"active_ntfy", p.activeNtfy.Load(),
+			"timeout", "15s",
+		)
+		sentry.CaptureMessage("processor shutdown timed out")
+	}
 }
 
 func (p *Processor) cleanupLoop() {
@@ -106,7 +148,7 @@ func (p *Processor) runCleanup() {
 	before := time.Now().Add(-retentionPeriod)
 	deleted, err := p.store.DeleteOldTransactions(context.Background(), before)
 	if err != nil {
-		slog.Error("transaction cleanup failed", "error", err)
+		observe.Error(context.Background(), "transaction cleanup failed", err)
 		return
 	}
 	if deleted > 0 {
@@ -118,9 +160,14 @@ func (p *Processor) sendNtfy(projectID int64, result *UpsertResult) {
 	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
 	defer cancel()
 
-	projectName, ntfyURL, ntfyTopic, ntfyToken, err := p.store.GetProjectNtfyConfig(ctx, projectID)
-	if err != nil || ntfyURL == "" || ntfyTopic == "" {
-		return // ntfy not configured for this project
+	projectName, cfg, err := p.store.GetProjectNtfyConfig(ctx, projectID)
+	if err != nil {
+		observe.Error(ctx, "ntfy: fetch config failed", err, "project", projectID)
+		return
+	}
+	if cfg == nil {
+		slog.Debug("ntfy: not configured", "project", projectID)
+		return
 	}
 
 	issue := result.Issue
@@ -135,28 +182,27 @@ func (p *Processor) sendNtfy(projectID int64, result *UpsertResult) {
 		issue.Level, prio, issue.FirstSeen.UTC().Format(time.RFC3339))
 	clickURL := fmt.Sprintf("https://%s/admin/#/issues/%d", p.domain, issue.ID)
 
-	endpoint := fmt.Sprintf("%s/%s", strings.TrimRight(ntfyURL, "/"), ntfyTopic)
-	req, err := http.NewRequestWithContext(ctx, "POST", endpoint, strings.NewReader(body))
-	if err != nil {
-		slog.Warn("ntfy request build failed", "project", projectID, "error", err)
-		return
-	}
-	req.Header.Set("Title", title)
-	req.Header.Set("Click", clickURL)
-	req.Header.Set("Priority", "default")
-	if ntfyToken != "" {
-		req.Header.Set("Authorization", "Bearer "+ntfyToken)
-	}
+	slog.Debug("ntfy: sending", "project", projectID, "config", cfg.Name, "url", cfg.URL, "topic", cfg.Topic)
 
-	resp, err := http.DefaultClient.Do(req)
+	statusCode, respBody, err := p.ntfySender.Send(ctx, *cfg, notify.NtfyPayload{
+		Title:    title,
+		Body:     body,
+		ClickURL: clickURL,
+	})
 	if err != nil {
-		slog.Warn("ntfy send failed", "project", projectID, "error", err)
+		slog.Warn("ntfy: send failed", "project", projectID, "error", err)
 		return
 	}
-	resp.Body.Close()
-	if resp.StatusCode >= 400 {
-		slog.Warn("ntfy returned error", "project", projectID, "status", resp.StatusCode)
+	if statusCode >= 500 {
+		slog.Warn("ntfy: server error", "project", projectID, "status", statusCode, "responseBody", respBody)
+		observe.Error(ctx, "ntfy: server error", fmt.Errorf("ntfy returned %d", statusCode), "project", projectID)
+		return
 	}
+	if statusCode >= 400 {
+		slog.Warn("ntfy: send failed", "project", projectID, "status", statusCode, "responseBody", respBody)
+		return
+	}
+	slog.Info("ntfy: sent", "project", projectID, "status", statusCode)
 }
 
 // Process handles all items in an envelope for the given project.
@@ -236,7 +282,14 @@ func (p *Processor) processEvent(ctx context.Context, projectID int64, payload j
 
 	// Send ntfy notification for new issues and regressions
 	if result.IsNew || result.IsRegression {
-		go p.sendNtfy(projectID, result)
+		p.wg.Add(1)
+		go func() {
+			defer p.wg.Done()
+			defer observe.RecoverPanic(context.Background(), "ntfy", "project", projectID)
+			p.activeNtfy.Add(1)
+			defer p.activeNtfy.Add(-1)
+			p.sendNtfy(projectID, result)
+		}()
 	}
 
 	return nil
