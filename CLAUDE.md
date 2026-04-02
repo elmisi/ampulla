@@ -65,6 +65,8 @@ Both Web API and Admin API are only mounted when `ADMIN_USER` + `ADMIN_PASSWORD`
 - `internal/envelope/` — Sentry envelope wire format parser
 - `internal/event/` — domain models (`model.go`), `Envelope`/`EnvelopeItem` types, worker pool processor (`processor.go`), ntfy notifications, cleanup goroutine
 - `internal/grouping/` — fingerprinting: exception type + value + top frame → SHA-256
+- `internal/notify/` — ntfy sender service (`NtfySender` interface, `HTTPNtfySender` with dedicated client)
+- `internal/observe/` — self-monitoring: `Error`, `Message`, `RecoverPanic`, `Throttled` (slog + Sentry best-effort)
 - `internal/store/` — PostgreSQL repository (single `postgres.go`) + embedded migrations
 
 ### Key Interfaces
@@ -89,7 +91,7 @@ Both Web API and Admin API are only mounted when `ADMIN_USER` + `ADMIN_PASSWORD`
 
 ## Database
 
-PostgreSQL 16. Tables: `organizations`, `projects` (with `ntfy_url`, `ntfy_topic`, `ntfy_token`), `project_keys`, `issues`, `events`, `transactions`, `spans`. Migrations in `internal/store/migrations/` (001 through 007). Migrations use `golang-migrate/migrate` with embedded `iofs` source.
+PostgreSQL 16. Tables: `organizations`, `projects` (with `ntfy_config_id` FK), `project_keys`, `issues`, `events`, `transactions`, `spans`, `ntfy_configurations`. Migrations in `internal/store/migrations/` (001 through 009). Migrations use `golang-migrate/migrate` with embedded `iofs` source.
 
 Key constraints: `events.issue_id` → `issues(id) ON DELETE CASCADE`, `spans.transaction_id` → `transactions(id) ON DELETE CASCADE`.
 
@@ -124,9 +126,6 @@ All via environment variables. See `.env.example` for defaults.
 
 ## Notifications
 
-Per-project ntfy integration configured via admin UI (project edit form):
-- **ntfy Server URL** — e.g. `https://n.elmisi.com`
-- **Topic** — e.g. `ampulla-errors`
-- **Token** — optional Bearer token for authenticated ntfy servers
+Shared ntfy configurations managed via admin UI (`#/ntfy` page). Each project optionally links to one configuration via `ntfy_config_id` (set in project edit form). Configurations include server URL, topic, and optional Bearer token.
 
 Triggers: new issue (first time fingerprint seen), regression (resolved issue receives new event, auto-reopened to unresolved).

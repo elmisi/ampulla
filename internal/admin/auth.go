@@ -90,8 +90,15 @@ func (a *Auth) allowLogin(ip string) bool {
 	now := time.Now()
 	cutoff := now.Add(-loginRateWindow)
 
+	// Lazy eviction: remove all IPs with only stale entries
+	for k, v := range a.loginAttempts {
+		if len(v) > 0 && v[len(v)-1].Before(cutoff) {
+			delete(a.loginAttempts, k)
+		}
+	}
+
 	attempts := a.loginAttempts[ip]
-	// Remove expired entries
+	// Remove expired entries for the requesting IP
 	valid := attempts[:0]
 	for _, t := range attempts {
 		if t.After(cutoff) {
