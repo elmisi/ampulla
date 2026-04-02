@@ -121,20 +121,25 @@ func (m *Middleware) evictExpired() {
 	}
 }
 
-// extractSentryClient gets the sentry_client value from the X-Sentry-Auth header.
+// extractSentryClient gets the sentry_client value from the X-Sentry-Auth header or query params.
 // Format: Sentry sentry_version=7, sentry_client=sentry.python/1.45.2, sentry_key=<key>
 func extractSentryClient(r *http.Request) string {
 	auth := r.Header.Get("X-Sentry-Auth")
-	if auth == "" {
-		return ""
-	}
-	for _, part := range strings.Split(auth, ",") {
-		part = strings.TrimSpace(part)
-		part = strings.TrimPrefix(part, "Sentry ")
-		if strings.HasPrefix(part, "sentry_client=") {
-			return strings.TrimPrefix(part, "sentry_client=")
+	if auth != "" {
+		for _, part := range strings.Split(auth, ",") {
+			part = strings.TrimSpace(part)
+			part = strings.TrimPrefix(part, "Sentry ")
+			if strings.HasPrefix(part, "sentry_client=") {
+				return strings.TrimPrefix(part, "sentry_client=")
+			}
 		}
 	}
+
+	// Browser SDKs send sentry_client as a query parameter
+	if client := r.URL.Query().Get("sentry_client"); client != "" {
+		return client
+	}
+
 	return ""
 }
 
