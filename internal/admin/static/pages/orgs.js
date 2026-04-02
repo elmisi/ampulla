@@ -110,7 +110,7 @@ async function renderOrgForm(org) {
       } else {
         const t = el('table');
         t.appendChild(el('thead', null, el('tr', null,
-          el('th', null, 'Name'), el('th', null, 'Slug'), el('th', null, 'Platform'), el('th', null, 'Actions')
+          el('th', null, 'Name'), el('th', null, 'Slug'), el('th', null, 'Platform'), el('th', null, 'Last Transaction'), el('th', null, 'Actions')
         )));
         const tb = el('tbody');
         projects.forEach(p => {
@@ -118,6 +118,7 @@ async function renderOrgForm(org) {
             el('td', null, el('a', { href: '#/projects/' + p.id }, p.name)),
             el('td', { style: 'color:var(--muted)' }, p.slug),
             el('td', { style: 'color:var(--muted)' }, p.platform || '-'),
+            el('td', { style: 'color:var(--muted)' }, p.lastTransaction ? timeAgo(p.lastTransaction) : '-'),
             el('td', null,
               el('button', { className: 'sm danger', onClick: async () => {
                 if (await confirm('Delete project "' + p.name + '"?')) {

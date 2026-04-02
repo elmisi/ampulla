@@ -205,12 +205,16 @@ type scannable interface {
 
 func scanProject(row scannable, p *event.Project) error {
 	var platform, ntfyURL, ntfyTopic, ntfyToken, knownSDK, lastSDK *string
+	var lastTransaction *time.Time
 	if err := row.Scan(&p.ID, &p.OrgID, &p.Name, &p.Slug, &platform, &p.CreatedAt,
-		&ntfyURL, &ntfyTopic, &ntfyToken, &knownSDK, &lastSDK); err != nil {
+		&lastTransaction, &ntfyURL, &ntfyTopic, &ntfyToken, &knownSDK, &lastSDK); err != nil {
 		return err
 	}
 	if platform != nil {
 		p.Platform = *platform
+	}
+	if lastTransaction != nil {
+		p.LastTransaction = lastTransaction
 	}
 	if ntfyURL != nil {
 		p.NtfyURL = *ntfyURL
@@ -234,6 +238,7 @@ func scanProject(row scannable, p *event.Project) error {
 func (db *DB) ListProjects(ctx context.Context, orgSlug string) ([]event.Project, error) {
 	rows, err := db.pool.Query(ctx, `
 		SELECT p.id, p.org_id, p.name, p.slug, p.platform, p.created_at,
+		       (SELECT MAX(t.timestamp) FROM transactions t WHERE t.project_id = p.id) AS last_transaction,
 		       p.ntfy_url, p.ntfy_topic, p.ntfy_token, p.known_sdk_version, p.last_sdk_version
 		FROM projects p
 		JOIN organizations o ON o.id = p.org_id
@@ -455,6 +460,7 @@ func (db *DB) DeleteProject(ctx context.Context, id int64) error {
 func (db *DB) ListAllProjects(ctx context.Context) ([]event.Project, error) {
 	rows, err := db.pool.Query(ctx, `
 		SELECT p.id, p.org_id, p.name, p.slug, p.platform, p.created_at,
+		       (SELECT MAX(t.timestamp) FROM transactions t WHERE t.project_id = p.id) AS last_transaction,
 		       p.ntfy_url, p.ntfy_topic, p.ntfy_token, p.known_sdk_version, p.last_sdk_version
 		FROM projects p ORDER BY p.name
 	`)
@@ -846,6 +852,7 @@ func generateKey() string {
 func (db *DB) GetProjectByOrgAndSlug(ctx context.Context, orgSlug, projectSlug string) (*event.Project, error) {
 	row := db.pool.QueryRow(ctx, `
 		SELECT p.id, p.org_id, p.name, p.slug, p.platform, p.created_at,
+		       (SELECT MAX(t.timestamp) FROM transactions t WHERE t.project_id = p.id) AS last_transaction,
 		       p.ntfy_url, p.ntfy_topic, p.ntfy_token, p.known_sdk_version, p.last_sdk_version
 		FROM projects p
 		JOIN organizations o ON o.id = p.org_id

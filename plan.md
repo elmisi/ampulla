@@ -2,13 +2,13 @@
 
 ## Context
 
-Ampulla (v0.3.0) e' un error tracker Sentry-compatible scritto in Go. Il servizio funziona ma ha due classi di problema:
+Ampulla (v0.4.0) e' un error tracker Sentry-compatible scritto in Go. Il servizio funziona ma ha due classi di problema:
 
 1. **Perdita di dati alla fonte:** `Processor.Enqueue()` scarta eventi silenziosamente quando la coda e' piena, mentre gli endpoint ingest rispondono comunque `200`. Questo e' il bug piu' grave: il client crede che l'errore sia stato registrato, ma non esiste nel DB.
 
 2. **Cecita' operativa:** le notifiche ntfy non arrivano, e gli errori interni di Ampulla (panic, cleanup failure, queue drop) non vengono catturati dal self-monitoring Sentry. Questo non perde eventi, ma rende invisibili sia gli errori esterni (via ntfy) sia quelli interni (via Sentry).
 
-> **NOTE**: Qui manca un chiarimento importante: il self-monitoring attuale copre solo il processo Go. Gli errori JavaScript dell'admin UI di Ampulla non vengono catturati dal `sentry-go` server-side. Se per "errori generati da ampulla stesso" includi anche il frontend admin, il piano deve prevedere un Browser SDK o almeno un hook `window.onerror` / `unhandledrejection`.
+Il self-monitoring frontend e' gia' coperto: il Browser SDK Sentry e' stato integrato nell'admin UI (v0.4.0, progetto 5) con error tracking e performance tracing. Il piano si concentra ora sul backend Go.
 
 ---
 
@@ -73,31 +73,38 @@ if !h.processor.Enqueue(project.ID, env, sdkClient) {
 
 **Problema:** oggi Ampulla ha il Sentry Go SDK configurato (`cmd/ampulla/main.go:37-49`) con tracing sui route admin/web, ma gli errori interni non vengono catturati. `slog` logga sul container stdout, ma senza dashboard centralizzata questi log si perdono.
 
-> **NOTE**: C'e' anche un limite architetturale: Ampulla oggi si auto-invia gli errori a se stesso. In caso di DB down, queue full o shutdown degradato, proprio le catture Sentry proposte qui possono fallire. Per i failure mode critici il piano dovrebbe esplicitare che `slog` resta la fonte minima garantita, e valutare un progetto/istanza Sentry separata o almeno un fallback esterno per il self-monitoring.
+**Vincolo architetturale:** Ampulla si auto-invia gli errori a se stesso (`SENTRY_DSN` punta alla stessa istanza). Questo significa che in caso di DB down, queue full o shutdown degradato, le catture Sentry proposte qui possono fallire. Per questo motivo:
+- `slog` resta la **fonte minima garantita** — ogni cattura Sentry deve avere un corrispondente log locale con contesto completo
+- Le catture Sentry sono **best-effort** — non devono bloccare il flusso principale ne' amplificare problemi di overload
+- Per il futuro si puo' valutare un `SENTRY_DSN` esterno per il self-monitoring, ma non e' un requisito di questa iterazione
 
 **Errori da catturare:**
 
 | Errore | File | Oggi | Dopo |
 |--------|------|------|------|
-| Queue drop | `event/processor.go:79` | slog.Warn | + sentry.CaptureMessage |
+| Queue drop | `event/processor.go:79` | slog.Warn | + sentry (con rate limiting, vedi sotto) |
 | Worker panic | `event/processor.go:67` | crash worker | recover + slog.Error + sentry.CurrentHub().Recover() |
 | ntfy goroutine panic | `event/processor.go:239` | goroutine leak | recover + slog.Error + sentry.CurrentHub().Recover() |
 | ntfy send failure | `event/processor.go:152-158` | slog.Warn | + sentry.CaptureMessage (solo HTTP >= 500, non 4xx config errors) |
 | Cleanup failure | `event/processor.go:109` | slog.Error | + sentry.CaptureException |
 | Admin serverError | `api/admin/handler.go:471` | slog.Error | + sentry.CaptureException |
-| HTTP panic | `main.go:73` (Recoverer) | chi.Recoverer logga e 500 | aggiungere middleware Sentry pre-Recoverer |
+| HTTP panic | `main.go:73` (Recoverer) | chi.Recoverer logga e 500 | aggiungere middleware Sentry pre-Recoverer **globale** (su tutti i route, incluso ingest) |
 | Startup/shutdown error | `main.go` | slog.Error + os.Exit | + sentry.CaptureException + sentry.Flush prima di exit |
 
 **Implementazione:**
 
 - Creare un helper `internal/observe/capture.go` con funzioni wrapper:
-  - `observe.Error(err error)` → slog.Error + sentry.CaptureException
-  - `observe.RecoverPanic(ctx)` → per defer, cattura panic con stack trace completo via `sentry.CurrentHub().RecoverWithContext(ctx, r)`
-  - `observe.Message(msg string)` → slog.Warn + sentry.CaptureMessage
-- Usare `runtime/debug.Stack()` nel recovery per loggare lo stack trace completo in slog
-- Aggiungere middleware Sentry per panic HTTP in `main.go` (prima di `middleware.Recoverer`)
+  - `observe.Error(err error)` → slog.Error + sentry.CaptureException (best-effort)
+  - `observe.RecoverPanic(ctx)` → per defer, cattura panic con stack trace completo via `sentry.CurrentHub().RecoverWithContext(ctx, r)` + `runtime/debug.Stack()` nel log
+  - `observe.Message(msg string)` → slog.Warn + sentry.CaptureMessage (best-effort)
+  - `observe.Throttled(key string, interval time.Duration, fn func())` → esegue `fn` al massimo una volta per `interval` per chiave. Usato per queue drop e altri eventi ad alta frequenza
 
-> **NOTE**: `observe.Message` non va usato in modo indiscriminato sui percorsi di overload. Se `queue full` genera una `CaptureMessage` per ogni evento rifiutato, rischi di amplificare il problema e di creare loop sul self-monitoring verso la stessa Ampulla. Qui serve rate limiting / deduplica temporale, oppure un semplice contatore/metrica locale invece di un evento Sentry per ogni drop.
+- **Rate limiting per queue drop:** `observe.Message` non va usato per ogni evento rifiutato — durante overload amplificherebbe il problema e creerebbe un loop verso la stessa Ampulla. Implementazione:
+  - Contatore atomico locale (`queueDropCount int64`) incrementato ad ogni drop
+  - `observe.Throttled("queue_full", 1*time.Minute, ...)` invia un singolo `CaptureMessage` al massimo ogni minuto con il conteggio totale dei drop nel periodo
+  - Il log `slog.Warn` resta per ogni singolo drop (log locale e' economico)
+
+- Aggiungere middleware Sentry per panic HTTP in `main.go`, **registrato globalmente** sul router (prima di `middleware.Recoverer`), non solo sulle route admin/web. Un panic sugli endpoint ingest e' tra gli errori piu' importanti da catturare.
 
 **Test:** unit test che verifica che `observe.RecoverPanic` catturi correttamente un panic (mockando l'hub Sentry).
 
@@ -214,7 +221,7 @@ Stesso pattern: recovery con stack trace + Sentry. Il worker sopravvive e contin
 
 Il timeout al punto 4 e' un **failure mode** da evidenziare e ridurre al minimo, non un comportamento "accettabile". Va loggato, catturato in Sentry, e idealmente non dovrebbe mai scattare con il dimensionamento attuale (1k-5k eventi/mese, coda di 1000).
 
-> **NOTE**: Anche qui vale lo stesso caveat: se `SENTRY_DSN` punta alla stessa istanza, durante shutdown degradato la `CaptureMessage` finale potrebbe non arrivare. Conviene trattarla come best-effort e assicurarsi che il log locale contenga sempre abbastanza contesto (`queue_len`, job in corso, timeout esatto).
+La cattura Sentry al punto 4 e' **best-effort**: se `SENTRY_DSN` punta alla stessa istanza, durante shutdown degradato potrebbe non arrivare. Il log locale deve contenere contesto completo (`queue_len`, numero di goroutine ancora attive, timeout esatto) per garantire diagnosticabilita' anche senza Sentry.
 
 **Fix in `internal/event/processor.go`:**
 
@@ -235,7 +242,8 @@ func (p *Processor) Close() {
     case <-done:
         slog.Info("processor shutdown complete")
     case <-time.After(15 * time.Second):
-        slog.Error("processor shutdown timed out, events in queue may be lost")
+        slog.Error("processor shutdown timed out, events in queue may be lost",
+            "timeout", "15s")
         sentry.CaptureMessage("processor shutdown timed out")
         sentry.Flush(2 * time.Second)
     }
@@ -254,9 +262,7 @@ Utile operativamente ma non critico per no-loss. Priorita' inferiore rispetto ai
 
 1. **Request logging middleware** in `cmd/ampulla/main.go`: metodo, path, status, durata, IP. Info per >= 400, Debug per successi. Escludi `/health`.
 
-2. **Middleware Sentry per panic HTTP**: registrato **prima** di `middleware.Recoverer`, cattura i panic con `sentry.CurrentHub().RecoverWithContext()` prima che Recoverer li trasformi in 500 senza traccia.
-
-> **NOTE**: Il middleware di panic dovrebbe essere globale, non limitato alle route admin/web dove oggi c'e' il tracing. Se un panic avviene sugli endpoint ingest, e' proprio uno degli errori piu' importanti da auto-catturare.
+2. **Middleware Sentry per panic HTTP**: registrato **globalmente** sul router principale (prima di `middleware.Recoverer`), copre tutti i route incluso ingest. Un panic sugli endpoint ingest e' tra gli errori piu' importanti da catturare — limitare il middleware alle sole route admin/web lascerebbe scoperto il percorso critico.
 
 ### 10. Pulizia mappa loginAttempts
 
@@ -277,9 +283,10 @@ Hardening utile ma non sul critical path. Priorita' bassa.
 ## Edge Cases and Risks
 
 - **503 e retry SDK:** Sentry SDK riprova automaticamente su 429/503. Se la coda resta piena a lungo, il client accumulera' eventi localmente e li inviera' quando Ampulla torna disponibile. Il `Retry-After: 60` header da' al client un hint ragionevole.
+- **Self-monitoring loop:** Ampulla si auto-monitora. Le catture Sentry sono best-effort e non devono amplificare l'overload. Queue drop usa throttling (max 1 evento Sentry/minuto), gli altri errori sono a bassa frequenza per natura.
 - **test-ntfy endpoint:** espone l'invio di notifiche, ma e' protetto da session auth admin. Rischio basso.
 - **Panic recovery:** un panic indica un bug serio. Il recovery evita di perdere un worker, il bug viene catturato in Sentry con stack trace completo per permettere investigazione.
-- **Shutdown timeout:** e' un failure mode, non un comportamento accettato. Se scatta: log Error, cattura Sentry, e indica un problema di dimensionamento o di I/O bloccante da investigare.
+- **Shutdown timeout:** e' un failure mode, non un comportamento accettato. Se scatta: log Error con contesto completo, cattura Sentry best-effort. Indica un problema di dimensionamento o di I/O bloccante da investigare.
 - **Event retention:** disabilitato di default. Attivandolo, l'utente accetta esplicitamente la cancellazione.
 
 ---
@@ -292,9 +299,7 @@ Hardening utile ma non sul critical path. Priorita' bassa.
 
 3. **Che comportamento vuoi quando la coda e' piena?** Il piano propone `503` con `Retry-After` (che Sentry SDK gestisce nativamente). Alternative: `429` (semantica diversa), blocking con timeout (rischia di bloccare le goroutine HTTP).
 
-4. **Quali errori interni di Ampulla vuoi assolutamente catturare in Sentry?** Il piano propone: panic HTTP, panic worker, panic ntfy, queue drop, cleanup failure, serverError admin, ntfy server error (>= 500), startup/shutdown error. Troppo? Troppo poco?
-
-> **NOTE**: A questa domanda aggiungerei esplicitamente: vuoi coprire anche gli errori del frontend admin di Ampulla? Se si', serve decidere se introdurre un progetto Sentry separato per `ampulla-admin-ui`, per non mischiare errori browser e backend.
+4. **Quali errori interni di Ampulla vuoi assolutamente catturare in Sentry?** Il piano propone: panic HTTP (globale), panic worker, panic ntfy, queue drop (throttled), cleanup failure, serverError admin, ntfy server error (>= 500), startup/shutdown error. Troppo? Troppo poco?
 
 5. **Il `SESSION_SECRET` e' configurato nel `.env` o viene auto-generato?** Se auto-generato, ogni restart invalida le sessioni admin.
 
@@ -309,12 +314,10 @@ Hardening utile ma non sul critical path. Priorita' bassa.
 - [ ] T2: Test automatico: coda piena → `Enqueue` false → handler 503
 
 ### Fase 2 — Self-monitoring
-- [ ] T3: Creare `internal/observe/capture.go` con `Error()`, `RecoverPanic()`, `Message()`
-- [ ] T4: Integrare `observe` in: queue drop, worker panic, ntfy panic, cleanup failure, serverError admin
-- [ ] T5: Aggiungere middleware Sentry per panic HTTP (prima di Recoverer)
+- [ ] T3: Creare `internal/observe/capture.go` con `Error()`, `RecoverPanic()`, `Message()`, `Throttled()`
+- [ ] T4: Integrare `observe` in: queue drop (throttled), worker panic, ntfy panic, cleanup failure, serverError admin
+- [ ] T5: Aggiungere middleware Sentry globale per panic HTTP (prima di Recoverer, su tutti i route)
 - [ ] T6: Catturare errori startup/shutdown in Sentry prima di exit
-
-> **NOTE**: Se includi l'admin UI nel perimetro di "errori di Ampulla", qui manca un task dedicato per il frontend: Browser SDK o bridge minimale `window.onerror`/`unhandledrejection` verso un endpoint server-side. Senza questo la fase "Self-monitoring" resta backend-only.
 
 ### Fase 3 — Fix ntfy
 - [ ] T7: Logging diagnostico completo in `sendNtfy()` (separare errore DB da config assente)
@@ -327,7 +330,7 @@ Hardening utile ma non sul critical path. Priorita' bassa.
 - [ ] T12: Fix goroutine leak sendNtfy (WaitGroup + observe.RecoverPanic)
 - [ ] T13: Panic recovery nei worker (observe.RecoverPanic + test)
 - [ ] T14: HTTP client dedicato per ntfy con Transport esplicito
-- [ ] T15: Graceful shutdown con drain + timeout come failure mode (Sentry capture)
+- [ ] T15: Graceful shutdown con drain + timeout come failure mode (log con contesto + Sentry best-effort)
 - [ ] T16: Health check container in docker-compose
 - [ ] T17: Request logging middleware
 - [ ] T18: Fix memory leak loginAttempts

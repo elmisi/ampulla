@@ -15,17 +15,18 @@ type Organization struct {
 }
 
 type Project struct {
-	ID              int64     `json:"id"`
-	OrgID           int64     `json:"organizationId"`
-	Name            string    `json:"name"`
-	Slug            string    `json:"slug"`
-	Platform        string    `json:"platform,omitempty"`
-	CreatedAt       time.Time `json:"dateCreated"`
-	NtfyURL         string    `json:"ntfyUrl,omitempty"`
-	NtfyTopic       string    `json:"ntfyTopic,omitempty"`
-	NtfyToken       string    `json:"ntfyToken,omitempty"`
-	KnownSDKVersion string    `json:"knownSdkVersion,omitempty"`
-	LastSDKVersion  string    `json:"lastSdkVersion,omitempty"`
+	ID              int64      `json:"id"`
+	OrgID           int64      `json:"organizationId"`
+	Name            string     `json:"name"`
+	Slug            string     `json:"slug"`
+	Platform        string     `json:"platform,omitempty"`
+	CreatedAt       time.Time  `json:"dateCreated"`
+	LastTransaction *time.Time `json:"lastTransaction,omitempty"`
+	NtfyURL         string     `json:"ntfyUrl,omitempty"`
+	NtfyTopic       string     `json:"ntfyTopic,omitempty"`
+	NtfyToken       string     `json:"ntfyToken,omitempty"`
+	KnownSDKVersion string     `json:"knownSdkVersion,omitempty"`
+	LastSDKVersion  string     `json:"lastSdkVersion,omitempty"`
 }
 
 type ProjectKey struct {
@@ -93,8 +94,8 @@ type Span struct {
 
 // UpsertResult wraps an issue with notification context.
 type UpsertResult struct {
-	Issue       *Issue
-	IsNew       bool // first time this fingerprint was seen
+	Issue        *Issue
+	IsNew        bool // first time this fingerprint was seen
 	IsRegression bool // was resolved, now has a new event
 }
 
