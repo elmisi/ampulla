@@ -1,5 +1,9 @@
 # Plan: Robustezza di Ampulla - no-loss ingest + ntfy shared config
 
+**STATO: COMPLETATO** — implementato e deployato in v0.5.0 (2026-04-02).
+
+Resta da fare solo la migrazione 010 (rimozione colonne legacy `ntfy_*` da projects) dopo verifica funzionale prolungata.
+
 ## Summary
 
 Obiettivo di questa iterazione:

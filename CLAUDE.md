@@ -41,9 +41,9 @@ Tests exist for `internal/envelope/` and `internal/grouping/` — both are pure 
 
 1. Sentry SDK sends event to `POST /api/{projectID}/envelope/` (or `/store/`)
 2. `auth.Middleware` extracts DSN public key from `X-Sentry-Auth` header or `sentry_key` query param, validates against DB (cached 5 min)
-3. Handler decompresses (gzip/deflate) and parses the Sentry envelope wire format (newline-delimited JSON), returns 200 immediately
-4. `event.Processor` worker pool (4 goroutines, channel queue of 1000) processes async: computes fingerprint, upserts issue, stores event/transaction/spans. Jobs are dropped if the queue is full.
-5. On new issue or regression (resolved issue receiving new event), sends ntfy notification if configured on the project.
+3. Handler decompresses (gzip/deflate) and parses the Sentry envelope wire format (newline-delimited JSON)
+4. `event.Processor` worker pool (4 goroutines, channel queue of 1000) processes async: computes fingerprint, upserts issue, stores event/transaction/spans. If the queue is full, handler returns `503 Service Unavailable` with `Retry-After: 60` (backpressure).
+5. On new issue or regression (resolved issue receiving new event), sends ntfy notification if configured on the project (via shared `ntfy_configurations`).
 
 ### API Surfaces
 
@@ -83,9 +83,11 @@ Both Web API and Admin API are only mounted when `ADMIN_USER` + `ADMIN_PASSWORD`
 - `docker-compose.yml` is the production compose (includes Traefik labels)
 - Batch span insert (single INSERT with N rows instead of N queries)
 - 30-day retention for transactions/spans via hourly cleanup goroutine (errors kept indefinitely)
-- Self-monitoring: Ampulla reports its own errors to itself via Sentry Go SDK (project 3, `SENTRY_DSN` env var)
+- Self-monitoring: `internal/observe` package provides slog + Sentry best-effort capture; panic recovery in workers, ntfy goroutines, and HTTP handler; throttled queue drop alerts
 - Sentry tracing middleware on admin/web API routes only (ingestion excluded to avoid loops)
-- Per-project ntfy notifications on new issues and regressions (resolved → new event)
+- Shared ntfy configurations (`ntfy_configurations` table) with admin CRUD + test endpoint; projects link via `ntfy_config_id` FK
+- Processor shutdown with 15s timeout and diagnostic logging; ntfy goroutines tracked in WaitGroup
+- HTTP request logging middleware (Debug < 400, Info >= 400, /health excluded)
 - Environment separation: use separate projects per environment (e.g. `myapp-prod`, `myapp-dev`) rather than environment-level filtering within a project
 - Project filter persisted in localStorage across Issues, Transactions, and Performance pages
 
