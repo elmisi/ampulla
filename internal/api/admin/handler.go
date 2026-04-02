@@ -407,10 +407,13 @@ func (h *Handler) ListTransactions(w http.ResponseWriter, r *http.Request) {
 // --- Dashboard ---
 
 func (h *Handler) Dashboard(w http.ResponseWriter, r *http.Request) {
-	stats, err := h.db.DashboardStats(r.Context())
+	projects, err := h.db.DashboardProjects(r.Context())
 	if err != nil {
 		serverError(w, err)
 		return
+	}
+	if projects == nil {
+		projects = []event.ProjectStats{}
 	}
 	alerts, err := h.db.SDKAlerts(r.Context())
 	if err != nil {
@@ -421,7 +424,7 @@ func (h *Handler) Dashboard(w http.ResponseWriter, r *http.Request) {
 		alerts = []event.SDKAlert{}
 	}
 	writeJSON(w, http.StatusOK, map[string]any{
-		"counts":    stats,
+		"projects":  projects,
 		"sdkAlerts": alerts,
 	})
 }

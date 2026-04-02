@@ -723,24 +723,33 @@ func (db *DB) SDKAlerts(ctx context.Context) ([]event.SDKAlert, error) {
 	return alerts, nil
 }
 
-// DashboardStats returns aggregate counts.
-func (db *DB) DashboardStats(ctx context.Context) (map[string]int64, error) {
-	stats := map[string]int64{}
-	for _, q := range []struct {
-		key   string
-		query string
-	}{
-		{"organizations", "SELECT COUNT(*) FROM organizations"},
-		{"projects", "SELECT COUNT(*) FROM projects"},
-		{"issues", "SELECT COUNT(*) FROM issues"},
-		{"events", "SELECT COUNT(*) FROM events"},
-		{"transactions", "SELECT COUNT(*) FROM transactions"},
-	} {
-		var count int64
-		if err := db.pool.QueryRow(ctx, q.query).Scan(&count); err != nil {
+// DashboardProjects returns per-project stats for the dashboard.
+func (db *DB) DashboardProjects(ctx context.Context) ([]event.ProjectStats, error) {
+	rows, err := db.pool.Query(ctx, `
+		SELECT p.id, p.name, p.slug, p.platform,
+			COALESCE((SELECT COUNT(*) FROM issues WHERE project_id = p.id), 0),
+			COALESCE((SELECT COUNT(*) FROM issues WHERE project_id = p.id AND status = 'unresolved'), 0),
+			COALESCE((SELECT COUNT(*) FROM transactions WHERE project_id = p.id), 0)
+		FROM projects p
+		ORDER BY p.name
+	`)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+
+	var stats []event.ProjectStats
+	for rows.Next() {
+		var s event.ProjectStats
+		var platform *string
+		if err := rows.Scan(&s.ID, &s.Name, &s.Slug, &platform,
+			&s.IssuesTotal, &s.IssuesUnresolved, &s.TransactionsTotal); err != nil {
 			return nil, err
 		}
-		stats[q.key] = count
+		if platform != nil {
+			s.Platform = *platform
+		}
+		stats = append(stats, s)
 	}
 	return stats, nil
 }

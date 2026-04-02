@@ -118,6 +118,17 @@ type PerformanceStats struct {
 	OldestTimestamp *time.Time      `json:"oldestTransaction"`
 }
 
+// ProjectStats holds per-project counts for the dashboard.
+type ProjectStats struct {
+	ID                 int64  `json:"id"`
+	Name               string `json:"name"`
+	Slug               string `json:"slug"`
+	Platform           string `json:"platform,omitempty"`
+	IssuesTotal        int64  `json:"issuesTotal"`
+	IssuesUnresolved   int64  `json:"issuesUnresolved"`
+	TransactionsTotal  int64  `json:"transactionsTotal"`
+}
+
 // SDKAlert represents a project with mismatched SDK version.
 type SDKAlert struct {
 	ProjectID    int64  `json:"projectId"`
