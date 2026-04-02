@@ -22,9 +22,8 @@ type Project struct {
 	Platform        string     `json:"platform,omitempty"`
 	CreatedAt       time.Time  `json:"dateCreated"`
 	LastTransaction *time.Time `json:"lastTransaction,omitempty"`
-	NtfyURL         string     `json:"ntfyUrl,omitempty"`
-	NtfyTopic       string     `json:"ntfyTopic,omitempty"`
-	NtfyToken       string     `json:"ntfyToken,omitempty"`
+	NtfyConfigID    *int64     `json:"ntfyConfigId,omitempty"`
+	NtfyConfigName  string     `json:"ntfyConfigName,omitempty"`
 	KnownSDKVersion string     `json:"knownSdkVersion,omitempty"`
 	LastSDKVersion  string     `json:"lastSdkVersion,omitempty"`
 }

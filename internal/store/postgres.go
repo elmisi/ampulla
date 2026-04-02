@@ -10,6 +10,7 @@ import (
 	"strings"
 
 	"github.com/elmisi/ampulla/internal/event"
+	"github.com/elmisi/ampulla/internal/notify"
 	"github.com/golang-migrate/migrate/v4"
 	_ "github.com/golang-migrate/migrate/v4/database/postgres"
 	"github.com/golang-migrate/migrate/v4/source/iofs"
@@ -204,10 +205,11 @@ type scannable interface {
 }
 
 func scanProject(row scannable, p *event.Project) error {
-	var platform, ntfyURL, ntfyTopic, ntfyToken, knownSDK, lastSDK *string
+	var platform, ntfyConfigName, knownSDK, lastSDK *string
+	var ntfyConfigID *int64
 	var lastTransaction *time.Time
 	if err := row.Scan(&p.ID, &p.OrgID, &p.Name, &p.Slug, &platform, &p.CreatedAt,
-		&lastTransaction, &ntfyURL, &ntfyTopic, &ntfyToken, &knownSDK, &lastSDK); err != nil {
+		&lastTransaction, &ntfyConfigID, &ntfyConfigName, &knownSDK, &lastSDK); err != nil {
 		return err
 	}
 	if platform != nil {
@@ -216,14 +218,11 @@ func scanProject(row scannable, p *event.Project) error {
 	if lastTransaction != nil {
 		p.LastTransaction = lastTransaction
 	}
-	if ntfyURL != nil {
-		p.NtfyURL = *ntfyURL
+	if ntfyConfigID != nil {
+		p.NtfyConfigID = ntfyConfigID
 	}
-	if ntfyTopic != nil {
-		p.NtfyTopic = *ntfyTopic
-	}
-	if ntfyToken != nil {
-		p.NtfyToken = *ntfyToken
+	if ntfyConfigName != nil {
+		p.NtfyConfigName = *ntfyConfigName
 	}
 	if knownSDK != nil {
 		p.KnownSDKVersion = *knownSDK
@@ -239,9 +238,10 @@ func (db *DB) ListProjects(ctx context.Context, orgSlug string) ([]event.Project
 	rows, err := db.pool.Query(ctx, `
 		SELECT p.id, p.org_id, p.name, p.slug, p.platform, p.created_at,
 		       (SELECT MAX(t.timestamp) FROM transactions t WHERE t.project_id = p.id) AS last_transaction,
-		       p.ntfy_url, p.ntfy_topic, p.ntfy_token, p.known_sdk_version, p.last_sdk_version
+		       p.ntfy_config_id, nc.name, p.known_sdk_version, p.last_sdk_version
 		FROM projects p
 		JOIN organizations o ON o.id = p.org_id
+		LEFT JOIN ntfy_configurations nc ON nc.id = p.ntfy_config_id
 		WHERE o.slug = $1
 		ORDER BY p.name
 	`, orgSlug)
@@ -419,26 +419,17 @@ func (db *DB) CreateProject(ctx context.Context, orgID int64, name, slug, platfo
 }
 
 // UpdateProject updates a project.
-func (db *DB) UpdateProject(ctx context.Context, id int64, name, slug, platform, ntfyURL, ntfyTopic, ntfyToken, knownSDKVersion string) error {
-	var plat, nURL, nTopic, nToken, kSDK *string
+func (db *DB) UpdateProject(ctx context.Context, id int64, name, slug, platform string, ntfyConfigID *int64, knownSDKVersion string) error {
+	var plat, kSDK *string
 	if platform != "" {
 		plat = &platform
-	}
-	if ntfyURL != "" {
-		nURL = &ntfyURL
-	}
-	if ntfyTopic != "" {
-		nTopic = &ntfyTopic
-	}
-	if ntfyToken != "" {
-		nToken = &ntfyToken
 	}
 	if knownSDKVersion != "" {
 		kSDK = &knownSDKVersion
 	}
 	_, err := db.pool.Exec(ctx,
-		`UPDATE projects SET name = $1, slug = $2, platform = $3, ntfy_url = $4, ntfy_topic = $5, ntfy_token = $6, known_sdk_version = $7 WHERE id = $8`,
-		name, slug, plat, nURL, nTopic, nToken, kSDK, id)
+		`UPDATE projects SET name = $1, slug = $2, platform = $3, ntfy_config_id = $4, known_sdk_version = $5 WHERE id = $6`,
+		name, slug, plat, ntfyConfigID, kSDK, id)
 	return err
 }
 
@@ -461,8 +452,10 @@ func (db *DB) ListAllProjects(ctx context.Context) ([]event.Project, error) {
 	rows, err := db.pool.Query(ctx, `
 		SELECT p.id, p.org_id, p.name, p.slug, p.platform, p.created_at,
 		       (SELECT MAX(t.timestamp) FROM transactions t WHERE t.project_id = p.id) AS last_transaction,
-		       p.ntfy_url, p.ntfy_topic, p.ntfy_token, p.known_sdk_version, p.last_sdk_version
-		FROM projects p ORDER BY p.name
+		       p.ntfy_config_id, nc.name, p.known_sdk_version, p.last_sdk_version
+		FROM projects p
+		LEFT JOIN ntfy_configurations nc ON nc.id = p.ntfy_config_id
+		ORDER BY p.name
 	`)
 	if err != nil {
 		return nil, err
@@ -825,23 +818,37 @@ func (db *DB) GetPerformanceStats(ctx context.Context, projectID int64, days int
 	return stats, nil
 }
 
-// GetProjectNtfyConfig returns the ntfy notification config and name for a project.
-func (db *DB) GetProjectNtfyConfig(ctx context.Context, projectID int64) (projectName, ntfyURL, ntfyTopic, ntfyToken string, err error) {
-	var url, topic, token *string
-	err = db.pool.QueryRow(ctx, `SELECT name, ntfy_url, ntfy_topic, ntfy_token FROM projects WHERE id = $1`, projectID).Scan(&projectName, &url, &topic, &token)
+// GetProjectNtfyConfig returns the ntfy notification config and project name.
+// cfg is nil when ntfy is not configured for the project.
+func (db *DB) GetProjectNtfyConfig(ctx context.Context, projectID int64) (projectName string, cfg *notify.NtfyConfig, err error) {
+	var ncID *int64
+	var ncName, ncURL, ncTopic, ncToken *string
+	err = db.pool.QueryRow(ctx, `
+		SELECT p.name, nc.id, nc.name, nc.url, nc.topic, nc.token
+		FROM projects p
+		LEFT JOIN ntfy_configurations nc ON nc.id = p.ntfy_config_id
+		WHERE p.id = $1
+	`, projectID).Scan(&projectName, &ncID, &ncName, &ncURL, &ncTopic, &ncToken)
 	if err != nil {
-		return "", "", "", "", err
+		return "", nil, err
 	}
-	if url != nil {
-		ntfyURL = *url
+	if ncID == nil {
+		return projectName, nil, nil
 	}
-	if topic != nil {
-		ntfyTopic = *topic
+	cfg = &notify.NtfyConfig{ID: *ncID}
+	if ncName != nil {
+		cfg.Name = *ncName
 	}
-	if token != nil {
-		ntfyToken = *token
+	if ncURL != nil {
+		cfg.URL = *ncURL
 	}
-	return
+	if ncTopic != nil {
+		cfg.Topic = *ncTopic
+	}
+	if ncToken != nil {
+		cfg.Token = *ncToken
+	}
+	return projectName, cfg, nil
 }
 
 // DeleteOldTransactions removes transactions (and their spans via CASCADE) older than before.
@@ -857,14 +864,107 @@ func generateKey() string {
 	return strings.ReplaceAll(uuid.New().String(), "-", "")
 }
 
+// --- Ntfy Configuration CRUD ---
+
+// NtfyConfigWithCount is an ntfy config with the number of projects using it.
+type NtfyConfigWithCount struct {
+	notify.NtfyConfig
+	CreatedAt    time.Time `json:"createdAt"`
+	ProjectCount int64     `json:"projectCount"`
+}
+
+// ListNtfyConfigs returns all ntfy configurations with usage counts.
+func (db *DB) ListNtfyConfigs(ctx context.Context) ([]NtfyConfigWithCount, error) {
+	rows, err := db.pool.Query(ctx, `
+		SELECT nc.id, nc.name, nc.url, nc.topic, nc.token, nc.created_at,
+		       (SELECT COUNT(*) FROM projects p WHERE p.ntfy_config_id = nc.id) AS project_count
+		FROM ntfy_configurations nc
+		ORDER BY nc.name
+	`)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+
+	var configs []NtfyConfigWithCount
+	for rows.Next() {
+		var c NtfyConfigWithCount
+		var token *string
+		if err := rows.Scan(&c.ID, &c.Name, &c.URL, &c.Topic, &token, &c.CreatedAt, &c.ProjectCount); err != nil {
+			return nil, err
+		}
+		if token != nil {
+			c.Token = *token
+		}
+		configs = append(configs, c)
+	}
+	return configs, nil
+}
+
+// GetNtfyConfig returns a single ntfy configuration by ID.
+func (db *DB) GetNtfyConfig(ctx context.Context, id int64) (*notify.NtfyConfig, error) {
+	var c notify.NtfyConfig
+	var token *string
+	err := db.pool.QueryRow(ctx,
+		`SELECT id, name, url, topic, token FROM ntfy_configurations WHERE id = $1`, id).
+		Scan(&c.ID, &c.Name, &c.URL, &c.Topic, &token)
+	if err != nil {
+		return nil, err
+	}
+	if token != nil {
+		c.Token = *token
+	}
+	return &c, nil
+}
+
+// CreateNtfyConfig creates a new ntfy configuration.
+func (db *DB) CreateNtfyConfig(ctx context.Context, name, url, topic, token string) (*notify.NtfyConfig, error) {
+	var c notify.NtfyConfig
+	var tok *string
+	if token != "" {
+		tok = &token
+	}
+	err := db.pool.QueryRow(ctx, `
+		INSERT INTO ntfy_configurations (name, url, topic, token)
+		VALUES ($1, $2, $3, $4)
+		RETURNING id, name, url, topic, token
+	`, name, url, topic, tok).Scan(&c.ID, &c.Name, &c.URL, &c.Topic, &tok)
+	if err != nil {
+		return nil, fmt.Errorf("create ntfy config: %w", err)
+	}
+	if tok != nil {
+		c.Token = *tok
+	}
+	return &c, nil
+}
+
+// UpdateNtfyConfig updates an ntfy configuration.
+func (db *DB) UpdateNtfyConfig(ctx context.Context, id int64, name, url, topic, token string) error {
+	var tok *string
+	if token != "" {
+		tok = &token
+	}
+	_, err := db.pool.Exec(ctx,
+		`UPDATE ntfy_configurations SET name = $1, url = $2, topic = $3, token = $4 WHERE id = $5`,
+		name, url, topic, tok, id)
+	return err
+}
+
+// DeleteNtfyConfig deletes an ntfy configuration. Projects using it get ntfy_config_id = NULL via ON DELETE SET NULL.
+func (db *DB) DeleteNtfyConfig(ctx context.Context, id int64) error {
+	_, err := db.pool.Exec(ctx, `DELETE FROM ntfy_configurations WHERE id = $1`, id)
+	return err
+}
+
 // GetProjectByOrgAndSlug returns a project by org slug and project slug.
 func (db *DB) GetProjectByOrgAndSlug(ctx context.Context, orgSlug, projectSlug string) (*event.Project, error) {
 	row := db.pool.QueryRow(ctx, `
 		SELECT p.id, p.org_id, p.name, p.slug, p.platform, p.created_at,
 		       (SELECT MAX(t.timestamp) FROM transactions t WHERE t.project_id = p.id) AS last_transaction,
-		       p.ntfy_url, p.ntfy_topic, p.ntfy_token, p.known_sdk_version, p.last_sdk_version
+		       p.ntfy_config_id, nc.name, p.known_sdk_version, p.last_sdk_version
 		FROM projects p
 		JOIN organizations o ON o.id = p.org_id
+		LEFT JOIN ntfy_configurations nc ON nc.id = p.ntfy_config_id
 		WHERE o.slug = $1 AND p.slug = $2
 	`, orgSlug, projectSlug)
 
