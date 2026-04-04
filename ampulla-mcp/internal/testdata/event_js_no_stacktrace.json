@@ -1,0 +1,17 @@
+{
+  "tags": {
+    "browser": "Chrome 120",
+    "os": "macOS"
+  },
+  "user": {
+    "ip_address": "192.168.1.1"
+  },
+  "breadcrumbs": [
+    {
+      "timestamp": "2026-04-04T11:00:00Z",
+      "type": "navigation",
+      "category": "navigation",
+      "message": "/ -> /dashboard"
+    }
+  ]
+}

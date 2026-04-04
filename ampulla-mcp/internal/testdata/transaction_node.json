@@ -1,0 +1,14 @@
+{
+  "tags": [
+    ["runtime", "node"],
+    ["http.method", "GET"]
+  ],
+  "request": {
+    "url": "https://api.example.com/users",
+    "method": "GET",
+    "headers": {
+      "Accept": "application/json",
+      "Cookie": "session=abc123"
+    }
+  }
+}

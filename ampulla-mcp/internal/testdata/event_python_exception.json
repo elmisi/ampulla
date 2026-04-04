@@ -1,0 +1,61 @@
+{
+  "exception": {
+    "values": [
+      {
+        "type": "ValueError",
+        "value": "bad input",
+        "stacktrace": {
+          "frames": [
+            {
+              "filename": "app/utils.py",
+              "function": "validate",
+              "lineno": 42,
+              "module": "app.utils"
+            },
+            {
+              "filename": "app/views.py",
+              "function": "handle_request",
+              "lineno": 100,
+              "module": "app.views"
+            }
+          ]
+        }
+      }
+    ]
+  },
+  "tags": [
+    ["environment", "production"],
+    ["server_name", "web-01"]
+  ],
+  "user": {
+    "id": "42",
+    "email": "alice@example.com"
+  },
+  "request": {
+    "url": "https://example.com/api/submit",
+    "method": "POST",
+    "headers": {
+      "Content-Type": "application/json",
+      "Authorization": "Bearer secret123",
+      "X-Request-ID": "abc-123"
+    }
+  },
+  "breadcrumbs": {
+    "values": [
+      {
+        "timestamp": "2026-04-04T10:59:00Z",
+        "type": "http",
+        "category": "httplib",
+        "message": "GET /api/check",
+        "level": "info"
+      },
+      {
+        "timestamp": "2026-04-04T11:00:00Z",
+        "type": "default",
+        "category": "console",
+        "message": "Processing input",
+        "level": "debug"
+      }
+    ]
+  }
+}
