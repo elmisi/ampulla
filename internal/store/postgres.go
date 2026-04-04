@@ -9,12 +9,14 @@ import (
 
 	"strings"
 
+	"github.com/elmisi/ampulla/internal/cursor"
 	"github.com/elmisi/ampulla/internal/event"
 	"github.com/elmisi/ampulla/internal/notify"
 	"github.com/golang-migrate/migrate/v4"
 	_ "github.com/golang-migrate/migrate/v4/database/postgres"
 	"github.com/golang-migrate/migrate/v4/source/iofs"
 	"github.com/google/uuid"
+	"github.com/jackc/pgx/v5"
 	"github.com/jackc/pgx/v5/pgxpool"
 )
 
@@ -262,20 +264,36 @@ func (db *DB) ListProjects(ctx context.Context, orgSlug string) ([]event.Project
 }
 
 // ListIssues returns issues for a project, filtered by org and project slug.
-func (db *DB) ListIssues(ctx context.Context, orgSlug, projectSlug string, cursor int64, limit int) ([]event.Issue, error) {
+func (db *DB) ListIssues(ctx context.Context, orgSlug, projectSlug string, cur cursor.Token, limit int) ([]event.Issue, error) {
 	if limit <= 0 || limit > 100 {
 		limit = 25
 	}
-	rows, err := db.pool.Query(ctx, `
-		SELECT i.id, i.project_id, i.title, i.fingerprint, i.level, i.status,
-		       i.first_seen, i.last_seen, i.event_count
-		FROM issues i
-		JOIN projects p ON p.id = i.project_id
-		JOIN organizations o ON o.id = p.org_id
-		WHERE o.slug = $1 AND p.slug = $2 AND i.id > $3
-		ORDER BY i.last_seen DESC
-		LIMIT $4
-	`, orgSlug, projectSlug, cursor, limit)
+	var rows pgx.Rows
+	var err error
+	if cur.ID == 0 && cur.Timestamp.IsZero() {
+		rows, err = db.pool.Query(ctx, `
+			SELECT i.id, i.project_id, i.title, i.fingerprint, i.level, i.status,
+			       i.first_seen, i.last_seen, i.event_count
+			FROM issues i
+			JOIN projects p ON p.id = i.project_id
+			JOIN organizations o ON o.id = p.org_id
+			WHERE o.slug = $1 AND p.slug = $2
+			ORDER BY i.last_seen DESC, i.id DESC
+			LIMIT $3
+		`, orgSlug, projectSlug, limit)
+	} else {
+		rows, err = db.pool.Query(ctx, `
+			SELECT i.id, i.project_id, i.title, i.fingerprint, i.level, i.status,
+			       i.first_seen, i.last_seen, i.event_count
+			FROM issues i
+			JOIN projects p ON p.id = i.project_id
+			JOIN organizations o ON o.id = p.org_id
+			WHERE o.slug = $1 AND p.slug = $2
+			  AND (i.last_seen, i.id) < ($3, $4)
+			ORDER BY i.last_seen DESC, i.id DESC
+			LIMIT $5
+		`, orgSlug, projectSlug, cur.Timestamp, cur.ID, limit)
+	}
 	if err != nil {
 		return nil, err
 	}
@@ -294,17 +312,30 @@ func (db *DB) ListIssues(ctx context.Context, orgSlug, projectSlug string, curso
 }
 
 // ListEventsByIssue returns events for an issue.
-func (db *DB) ListEventsByIssue(ctx context.Context, issueID, cursor int64, limit int) ([]event.Event, error) {
+func (db *DB) ListEventsByIssue(ctx context.Context, issueID int64, cur cursor.Token, limit int) ([]event.Event, error) {
 	if limit <= 0 || limit > 100 {
 		limit = 25
 	}
-	rows, err := db.pool.Query(ctx, `
-		SELECT id, event_id, project_id, issue_id, timestamp, platform, level, message, data, received_at
-		FROM events
-		WHERE issue_id = $1 AND id > $2
-		ORDER BY timestamp DESC
-		LIMIT $3
-	`, issueID, cursor, limit)
+	var rows pgx.Rows
+	var err error
+	if cur.ID == 0 && cur.Timestamp.IsZero() {
+		rows, err = db.pool.Query(ctx, `
+			SELECT id, event_id, project_id, issue_id, timestamp, platform, level, message, data, received_at
+			FROM events
+			WHERE issue_id = $1
+			ORDER BY timestamp DESC, id DESC
+			LIMIT $2
+		`, issueID, limit)
+	} else {
+		rows, err = db.pool.Query(ctx, `
+			SELECT id, event_id, project_id, issue_id, timestamp, platform, level, message, data, received_at
+			FROM events
+			WHERE issue_id = $1
+			  AND (timestamp, id) < ($2, $3)
+			ORDER BY timestamp DESC, id DESC
+			LIMIT $4
+		`, issueID, cur.Timestamp, cur.ID, limit)
+	}
 	if err != nil {
 		return nil, err
 	}
@@ -333,20 +364,36 @@ func (db *DB) ListEventsByIssue(ctx context.Context, issueID, cursor int64, limi
 }
 
 // ListTransactions returns transactions for an organization.
-func (db *DB) ListTransactions(ctx context.Context, orgSlug string, cursor int64, limit int) ([]event.Transaction, error) {
+func (db *DB) ListTransactions(ctx context.Context, orgSlug string, cur cursor.Token, limit int) ([]event.Transaction, error) {
 	if limit <= 0 || limit > 100 {
 		limit = 25
 	}
-	rows, err := db.pool.Query(ctx, `
-		SELECT t.id, t.event_id, t.project_id, t.trace_id, t.span_id, t.op, t.name,
-		       t.duration_ms, t.status, t.timestamp, t.data, t.received_at
-		FROM transactions t
-		JOIN projects p ON p.id = t.project_id
-		JOIN organizations o ON o.id = p.org_id
-		WHERE o.slug = $1 AND t.id > $2
-		ORDER BY t.timestamp DESC
-		LIMIT $3
-	`, orgSlug, cursor, limit)
+	var rows pgx.Rows
+	var err error
+	if cur.ID == 0 && cur.Timestamp.IsZero() {
+		rows, err = db.pool.Query(ctx, `
+			SELECT t.id, t.event_id, t.project_id, t.trace_id, t.span_id, t.op, t.name,
+			       t.duration_ms, t.status, t.timestamp, t.data, t.received_at
+			FROM transactions t
+			JOIN projects p ON p.id = t.project_id
+			JOIN organizations o ON o.id = p.org_id
+			WHERE o.slug = $1
+			ORDER BY t.timestamp DESC, t.id DESC
+			LIMIT $2
+		`, orgSlug, limit)
+	} else {
+		rows, err = db.pool.Query(ctx, `
+			SELECT t.id, t.event_id, t.project_id, t.trace_id, t.span_id, t.op, t.name,
+			       t.duration_ms, t.status, t.timestamp, t.data, t.received_at
+			FROM transactions t
+			JOIN projects p ON p.id = t.project_id
+			JOIN organizations o ON o.id = p.org_id
+			WHERE o.slug = $1
+			  AND (t.timestamp, t.id) < ($2, $3)
+			ORDER BY t.timestamp DESC, t.id DESC
+			LIMIT $4
+		`, orgSlug, cur.Timestamp, cur.ID, limit)
+	}
 	if err != nil {
 		return nil, err
 	}
@@ -537,18 +584,33 @@ func (db *DB) GetIssue(ctx context.Context, id int64) (*event.Issue, error) {
 }
 
 // AdminListIssues returns issues, optionally filtered by project ID.
-func (db *DB) AdminListIssues(ctx context.Context, projectID, cursor int64, limit int) ([]event.Issue, error) {
+func (db *DB) AdminListIssues(ctx context.Context, projectID int64, cur cursor.Token, limit int) ([]event.Issue, error) {
 	if limit <= 0 || limit > 100 {
 		limit = 25
 	}
-	query := `SELECT id, project_id, title, fingerprint, level, status, first_seen, last_seen, event_count FROM issues`
+	hasCursor := cur.ID != 0 || !cur.Timestamp.IsZero()
+	var query string
 	var args []any
-	if projectID > 0 {
-		query += ` WHERE project_id = $1 AND id > $2 ORDER BY last_seen DESC LIMIT $3`
-		args = []any{projectID, cursor, limit}
-	} else {
-		query += ` WHERE id > $1 ORDER BY last_seen DESC LIMIT $2`
-		args = []any{cursor, limit}
+	switch {
+	case projectID > 0 && hasCursor:
+		query = `SELECT id, project_id, title, fingerprint, level, status, first_seen, last_seen, event_count
+			FROM issues WHERE project_id = $1 AND (last_seen, id) < ($2, $3)
+			ORDER BY last_seen DESC, id DESC LIMIT $4`
+		args = []any{projectID, cur.Timestamp, cur.ID, limit}
+	case projectID > 0:
+		query = `SELECT id, project_id, title, fingerprint, level, status, first_seen, last_seen, event_count
+			FROM issues WHERE project_id = $1
+			ORDER BY last_seen DESC, id DESC LIMIT $2`
+		args = []any{projectID, limit}
+	case hasCursor:
+		query = `SELECT id, project_id, title, fingerprint, level, status, first_seen, last_seen, event_count
+			FROM issues WHERE (last_seen, id) < ($1, $2)
+			ORDER BY last_seen DESC, id DESC LIMIT $3`
+		args = []any{cur.Timestamp, cur.ID, limit}
+	default:
+		query = `SELECT id, project_id, title, fingerprint, level, status, first_seen, last_seen, event_count
+			FROM issues ORDER BY last_seen DESC, id DESC LIMIT $1`
+		args = []any{limit}
 	}
 	rows, err := db.pool.Query(ctx, query, args...)
 	if err != nil {
@@ -640,30 +702,39 @@ func (db *DB) ListSpansByTransaction(ctx context.Context, txnID int64) ([]event.
 }
 
 // AdminListTransactions returns transactions, optionally filtered by project ID.
-func (db *DB) AdminListTransactions(ctx context.Context, projectID, cursor int64, limit int) ([]event.Transaction, error) {
+func (db *DB) AdminListTransactions(ctx context.Context, projectID int64, cur cursor.Token, limit int) ([]event.Transaction, error) {
 	if limit <= 0 || limit > 100 {
 		limit = 25
 	}
+	hasCursor := cur.ID != 0 || !cur.Timestamp.IsZero()
 	var query string
 	var args []any
-	if projectID > 0 {
-		query = `
-			SELECT id, event_id, project_id, trace_id, span_id, op, name,
+	switch {
+	case projectID > 0 && hasCursor:
+		query = `SELECT id, event_id, project_id, trace_id, span_id, op, name,
 			       duration_ms, status, timestamp, data, received_at
 			FROM transactions
-			WHERE project_id = $1 AND id > $2
-			ORDER BY timestamp DESC
-			LIMIT $3`
-		args = []any{projectID, cursor, limit}
-	} else {
-		query = `
-			SELECT id, event_id, project_id, trace_id, span_id, op, name,
+			WHERE project_id = $1 AND (timestamp, id) < ($2, $3)
+			ORDER BY timestamp DESC, id DESC LIMIT $4`
+		args = []any{projectID, cur.Timestamp, cur.ID, limit}
+	case projectID > 0:
+		query = `SELECT id, event_id, project_id, trace_id, span_id, op, name,
+			       duration_ms, status, timestamp, data, received_at
+			FROM transactions WHERE project_id = $1
+			ORDER BY timestamp DESC, id DESC LIMIT $2`
+		args = []any{projectID, limit}
+	case hasCursor:
+		query = `SELECT id, event_id, project_id, trace_id, span_id, op, name,
 			       duration_ms, status, timestamp, data, received_at
 			FROM transactions
-			WHERE id > $1
-			ORDER BY timestamp DESC
-			LIMIT $2`
-		args = []any{cursor, limit}
+			WHERE (timestamp, id) < ($1, $2)
+			ORDER BY timestamp DESC, id DESC LIMIT $3`
+		args = []any{cur.Timestamp, cur.ID, limit}
+	default:
+		query = `SELECT id, event_id, project_id, trace_id, span_id, op, name,
+			       duration_ms, status, timestamp, data, received_at
+			FROM transactions ORDER BY timestamp DESC, id DESC LIMIT $1`
+		args = []any{limit}
 	}
 	rows, err := db.pool.Query(ctx, query, args...)
 	if err != nil {

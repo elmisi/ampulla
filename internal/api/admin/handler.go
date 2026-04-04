@@ -9,6 +9,7 @@ import (
 	"strconv"
 	"time"
 
+	"github.com/elmisi/ampulla/internal/cursor"
 	"github.com/elmisi/ampulla/internal/event"
 	"github.com/elmisi/ampulla/internal/notify"
 	"github.com/elmisi/ampulla/internal/store"
@@ -287,8 +288,8 @@ func (h *Handler) DeleteProjectKey(w http.ResponseWriter, r *http.Request) {
 
 func (h *Handler) ListIssues(w http.ResponseWriter, r *http.Request) {
 	projectID, _ := strconv.ParseInt(r.URL.Query().Get("project"), 10, 64)
-	cursor, limit := parsePagination(r)
-	issues, err := h.db.AdminListIssues(r.Context(), projectID, cursor, limit)
+	cur, limit := parsePagination(r)
+	issues, err := h.db.AdminListIssues(r.Context(), projectID, cur, limit)
 	if err != nil {
 		serverError(w, err)
 		return
@@ -353,8 +354,8 @@ func (h *Handler) ListIssueEvents(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, `{"error":"invalid id"}`, http.StatusBadRequest)
 		return
 	}
-	cursor, limit := parsePagination(r)
-	events, err := h.db.ListEventsByIssue(r.Context(), issueID, cursor, limit)
+	cur, limit := parsePagination(r)
+	events, err := h.db.ListEventsByIssue(r.Context(), issueID, cur, limit)
 	if err != nil {
 		serverError(w, err)
 		return
@@ -397,8 +398,8 @@ func (h *Handler) ListTransactionSpans(w http.ResponseWriter, r *http.Request) {
 
 func (h *Handler) ListTransactions(w http.ResponseWriter, r *http.Request) {
 	projectID, _ := strconv.ParseInt(r.URL.Query().Get("project"), 10, 64)
-	cursor, limit := parsePagination(r)
-	txns, err := h.db.AdminListTransactions(r.Context(), projectID, cursor, limit)
+	cur, limit := parsePagination(r)
+	txns, err := h.db.AdminListTransactions(r.Context(), projectID, cur, limit)
 	if err != nil {
 		serverError(w, err)
 		return
@@ -553,8 +554,8 @@ func paramInt64(r *http.Request, name string) (int64, error) {
 	return strconv.ParseInt(chi.URLParam(r, name), 10, 64)
 }
 
-func parsePagination(r *http.Request) (cursor int64, limit int) {
-	cursor, _ = strconv.ParseInt(r.URL.Query().Get("cursor"), 10, 64)
+func parsePagination(r *http.Request) (cur cursor.Token, limit int) {
+	cur, _ = cursor.Decode(r.URL.Query().Get("cursor"))
 	limit, _ = strconv.Atoi(r.URL.Query().Get("limit"))
 	if limit <= 0 || limit > 100 {
 		limit = 25

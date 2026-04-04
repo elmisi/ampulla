@@ -1,3 +1,14 @@
+## [0.6.0] - 2026-04-04
+
+### Added
+- `internal/cursor` package: opaque keyset pagination tokens (base64url JSON with timestamp + id)
+- Backward-compatible cursor decoding: plain numeric cursors still accepted
+
+### Fixed
+- Keyset pagination now uses `(timestamp, id) < (cursor_ts, cursor_id)` instead of `id > cursor`, fixing potential gaps and duplicates when ordering by `last_seen DESC` or `timestamp DESC`
+- All paginated queries now include secondary sort on `id DESC` for deterministic ordering
+- Affected endpoints: AdminListIssues, ListEventsByIssue, AdminListTransactions, ListIssues (web), ListTransactions (web)
+
 ## [0.5.0] - 2026-04-02
 
 ### Added
