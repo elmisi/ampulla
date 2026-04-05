@@ -71,6 +71,12 @@ func New(baseURL, user, password string) (*Client, error) {
 	if err != nil {
 		return nil, fmt.Errorf("invalid AMPULLA_URL: %w", err)
 	}
+	if u.Scheme == "" || u.Host == "" {
+		return nil, fmt.Errorf("invalid AMPULLA_URL: must include scheme and host (e.g. https://ampulla.example.com)")
+	}
+	if u.Scheme != "http" && u.Scheme != "https" {
+		return nil, fmt.Errorf("invalid AMPULLA_URL: scheme must be http or https")
+	}
 	host := u.Hostname()
 	if u.Scheme == "http" && host != "localhost" && host != "127.0.0.1" && host != "::1" {
 		return nil, fmt.Errorf("AMPULLA_URL must use https (http allowed only for localhost)")

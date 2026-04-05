@@ -2,6 +2,7 @@ package tools
 
 import (
 	"context"
+	"fmt"
 	"time"
 
 	"github.com/modelcontextprotocol/go-sdk/mcp"
@@ -42,11 +43,16 @@ func registerListIssues(s *mcp.Server, c *client.Client) {
 		Name:        "list_issues",
 		Description: "List issues for a project, optionally filtered by status",
 	}, func(ctx context.Context, req *mcp.CallToolRequest, args listIssuesArgs) (*mcp.CallToolResult, listIssuesOutput, error) {
+		if args.Status != "" && args.Status != "unresolved" && args.Status != "resolved" && args.Status != "ignored" {
+			return errResult(fmt.Errorf("invalid status %q: must be unresolved, resolved, or ignored", args.Status)), listIssuesOutput{}, nil
+		}
+
 		limit := clampInt(args.Limit, 1, 100, 25)
 
 		var collected []issueEntry
 		cursor := args.Cursor
-		truncated := false
+		exhausted := false // true when upstream has no more data
+		filled := false    // true when we collected enough
 
 		for page := 0; page < maxInternalPages; page++ {
 			raw, err := c.ListIssues(ctx, args.ProjectID, cursor, limit)
@@ -54,6 +60,7 @@ func registerListIssues(s *mcp.Server, c *client.Client) {
 				return errResult(err), listIssuesOutput{}, nil
 			}
 			if len(raw) == 0 {
+				exhausted = true
 				break
 			}
 
@@ -70,19 +77,19 @@ func registerListIssues(s *mcp.Server, c *client.Client) {
 
 			if len(collected) >= limit {
 				collected = collected[:limit]
+				filled = true
 				break
 			}
 
 			// If we got fewer than requested, no more data
 			if len(raw) < limit {
+				exhausted = true
 				break
 			}
 		}
 
-		// If we exhausted the page budget without filling, mark truncated
-		if args.Status != "" && len(collected) < limit && cursor != "" {
-			truncated = true
-		}
+		// Truncated only when we hit the page budget without exhausting data or filling results
+		truncated := !exhausted && !filled
 
 		out := listIssuesOutput{
 			Issues:    collected,
@@ -93,7 +100,7 @@ func registerListIssues(s *mcp.Server, c *client.Client) {
 		}
 
 		// nextCursor points to end of last scanned page
-		if len(collected) == limit || truncated {
+		if filled || truncated {
 			out.NextCursor = cursor
 		}
 
@@ -165,7 +172,10 @@ func registerGetIssue(s *mcp.Server, c *client.Client) {
 
 		// Fetch latest event
 		events, err := c.ListIssueEvents(ctx, args.IssueID, "", 1)
-		if err == nil && len(events) > 0 {
+		if err != nil {
+			return errResult(fmt.Errorf("issue fetched but latest event failed: %w", err)), getIssueOutput{}, nil
+		}
+		if len(events) > 0 {
 			ev := events[0]
 			parsed := ParseEventData(ev.Data)
 			out.LatestEvent = &eventDetail{

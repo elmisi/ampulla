@@ -288,7 +288,11 @@ func (h *Handler) DeleteProjectKey(w http.ResponseWriter, r *http.Request) {
 
 func (h *Handler) ListIssues(w http.ResponseWriter, r *http.Request) {
 	projectID, _ := strconv.ParseInt(r.URL.Query().Get("project"), 10, 64)
-	cur, limit := parsePagination(r)
+	cur, limit, err := parsePagination(r)
+	if err != nil {
+		http.Error(w, `{"error":"invalid cursor"}`, http.StatusBadRequest)
+		return
+	}
 	issues, err := h.db.AdminListIssues(r.Context(), projectID, cur, limit)
 	if err != nil {
 		serverError(w, err)
@@ -354,7 +358,11 @@ func (h *Handler) ListIssueEvents(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, `{"error":"invalid id"}`, http.StatusBadRequest)
 		return
 	}
-	cur, limit := parsePagination(r)
+	cur, limit, err := parsePagination(r)
+	if err != nil {
+		http.Error(w, `{"error":"invalid cursor"}`, http.StatusBadRequest)
+		return
+	}
 	events, err := h.db.ListEventsByIssue(r.Context(), issueID, cur, limit)
 	if err != nil {
 		serverError(w, err)
@@ -398,7 +406,11 @@ func (h *Handler) ListTransactionSpans(w http.ResponseWriter, r *http.Request) {
 
 func (h *Handler) ListTransactions(w http.ResponseWriter, r *http.Request) {
 	projectID, _ := strconv.ParseInt(r.URL.Query().Get("project"), 10, 64)
-	cur, limit := parsePagination(r)
+	cur, limit, err := parsePagination(r)
+	if err != nil {
+		http.Error(w, `{"error":"invalid cursor"}`, http.StatusBadRequest)
+		return
+	}
 	txns, err := h.db.AdminListTransactions(r.Context(), projectID, cur, limit)
 	if err != nil {
 		serverError(w, err)
@@ -554,8 +566,14 @@ func paramInt64(r *http.Request, name string) (int64, error) {
 	return strconv.ParseInt(chi.URLParam(r, name), 10, 64)
 }
 
-func parsePagination(r *http.Request) (cur cursor.Token, limit int) {
-	cur, _ = cursor.Decode(r.URL.Query().Get("cursor"))
+func parsePagination(r *http.Request) (cur cursor.Token, limit int, err error) {
+	raw := r.URL.Query().Get("cursor")
+	if raw != "" {
+		cur, err = cursor.Decode(raw)
+		if err != nil {
+			return cursor.Token{}, 0, fmt.Errorf("invalid cursor: %w", err)
+		}
+	}
 	limit, _ = strconv.Atoi(r.URL.Query().Get("limit"))
 	if limit <= 0 || limit > 100 {
 		limit = 25

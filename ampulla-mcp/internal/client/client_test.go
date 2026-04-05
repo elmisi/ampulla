@@ -9,6 +9,15 @@ import (
 	"testing"
 )
 
+func TestNew_RejectsMalformedURL(t *testing.T) {
+	for _, bad := range []string{"", "ampulla.example.com", "ftp://example.com"} {
+		_, err := New(bad, "u", "p")
+		if err == nil {
+			t.Errorf("New(%q): expected error for malformed URL", bad)
+		}
+	}
+}
+
 func TestNew_RejectsPlainHTTP(t *testing.T) {
 	_, err := New("http://example.com", "u", "p")
 	if err == nil {
