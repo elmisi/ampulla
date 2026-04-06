@@ -33,7 +33,7 @@ docker compose up -d
 cd ../traefik.services && ./deploy.sh ampulla
 ```
 
-Tests exist for `internal/envelope/` and `internal/grouping/` — both are pure unit tests with no external dependencies. Test style: `TestFunctionName` or `TestFunctionName_Scenario`, table-driven where appropriate, stdlib `testing` only (no assertion libraries).
+Tests exist for `internal/envelope/`, `internal/grouping/`, `internal/cursor/`, and `internal/admin/` (token generation/hashing/Bearer extraction) — all pure unit tests with no external dependencies. Test style: `TestFunctionName` or `TestFunctionName_Scenario`, table-driven where appropriate, stdlib `testing` only (no assertion libraries).
 
 ## Architecture
 
@@ -50,15 +50,15 @@ Tests exist for `internal/envelope/` and `internal/grouping/` — both are pure 
 - **Utility** (`/health`, `/api/version`) — unauthenticated, always available
 - **Ingestion** (`/api/{projectID}/envelope/`, `/store/`) — Sentry-compatible, DSN key auth via middleware
 - **Web API** (`/api/0/...`) — read-only Sentry-compatible endpoints, session-authenticated
-- **Admin API** (`/api/admin/...`) — CRUD for orgs/projects/keys/issues, performance stats, session-authenticated (HMAC-SHA256 cookies)
+- **Admin API** (`/api/admin/...`) — CRUD for orgs/projects/keys/issues, performance stats. Auth via `CombinedAuthMiddleware`: accepts `Authorization: Bearer ampt_...` (API token) OR HMAC-SHA256 session cookie
 
 Both Web API and Admin API are only mounted when `ADMIN_USER` + `ADMIN_PASSWORD` are set (`cfg.AdminEnabled()`).
 
 ### Key Packages
 
 - `cmd/ampulla/main.go` — entrypoint, router wiring, Sentry self-monitoring, graceful shutdown
-- `internal/admin/` — session auth (`auth.go`, HMAC-SHA256 cookies, login rate limiting) + admin UI (`ui.go` embeds `index.html` + `static/` directory)
-- `internal/api/admin/` — admin CRUD handlers + performance stats endpoint
+- `internal/admin/` — session auth (`auth.go`, HMAC-SHA256 cookies, login rate limiting), API token auth (`tokens.go`, sha256-hashed Bearer tokens, `CombinedAuthMiddleware`), admin UI (`ui.go` embeds `index.html` + `static/` directory including `pages/tokens.js`)
+- `internal/api/admin/` — admin CRUD handlers + performance stats endpoint + API token endpoints (`tokens.go`)
 - `internal/api/ingest/` — ingestion handlers (envelope + legacy store), gzip/deflate decompression
 - `internal/api/web/` — read-only Sentry-compatible API
 - `internal/auth/` — DSN public key extraction and validation middleware (in-memory cache with TTL)
@@ -86,6 +86,8 @@ Both Web API and Admin API are only mounted when `ADMIN_USER` + `ADMIN_PASSWORD`
 - Self-monitoring: `internal/observe` package provides slog + Sentry best-effort capture; panic recovery in workers, ntfy goroutines, and HTTP handler; throttled queue drop alerts
 - Sentry tracing middleware on admin/web API routes only (ingestion excluded to avoid loops)
 - Shared ntfy configurations (`ntfy_configurations` table) with admin CRUD + test endpoint; projects link via `ntfy_config_id` FK
+- API tokens (`api_tokens` table): plaintext shown only at creation, storage is sha256 hash, prefix kept for UI display, `last_used_at` updated best-effort on every request
+- Keyset pagination via `internal/cursor/` (opaque base64url JSON tokens with timestamp+id); backward compatible with plain numeric cursors
 - Processor shutdown with 15s timeout and diagnostic logging; ntfy goroutines tracked in WaitGroup
 - HTTP request logging middleware (Debug < 400, Info >= 400, /health excluded)
 - Environment separation: use separate projects per environment (e.g. `myapp-prod`, `myapp-dev`) rather than environment-level filtering within a project
@@ -93,7 +95,7 @@ Both Web API and Admin API are only mounted when `ADMIN_USER` + `ADMIN_PASSWORD`
 
 ## Database
 
-PostgreSQL 16. Tables: `organizations`, `projects` (with `ntfy_config_id` FK), `project_keys`, `issues`, `events`, `transactions`, `spans`, `ntfy_configurations`. Migrations in `internal/store/migrations/` (001 through 009). Migrations use `golang-migrate/migrate` with embedded `iofs` source.
+PostgreSQL 16. Tables: `organizations`, `projects` (with `ntfy_config_id` FK), `project_keys`, `issues`, `events`, `transactions`, `spans`, `ntfy_configurations`, `api_tokens`. Migrations in `internal/store/migrations/` (001 through 010). Migrations use `golang-migrate/migrate` with embedded `iofs` source.
 
 Key constraints: `events.issue_id` → `issues(id) ON DELETE CASCADE`, `spans.transaction_id` → `transactions(id) ON DELETE CASCADE`.
 
@@ -131,3 +133,23 @@ All via environment variables. See `.env.example` for defaults.
 Shared ntfy configurations managed via admin UI (`#/ntfy` page). Each project optionally links to one configuration via `ntfy_config_id` (set in project edit form). Configurations include server URL, topic, and optional Bearer token.
 
 Triggers: new issue (first time fingerprint seen), regression (resolved issue receives new event, auto-reopened to unresolved).
+
+## API Tokens
+
+Manage via admin UI (`#/tokens`). Tokens have format `ampt_<64 hex>`, plaintext is shown only once at creation time. Storage is sha256 hash + 12-char prefix (`ampt_xxxxxxx`). Used by machine clients (e.g. ampulla-mcp) to call the admin API without sharing the admin password.
+
+Endpoints (require existing auth):
+- `GET /api/admin/tokens` — list (no plaintext)
+- `POST /api/admin/tokens` — create, returns plaintext once
+- `DELETE /api/admin/tokens/{id}` — revoke
+
+## ampulla-mcp
+
+Sibling project at `ampulla-mcp/` (separate Go module, `go 1.25`). MCP (Model Context Protocol) server that exposes Ampulla data to AI agents via the SDK `github.com/modelcontextprotocol/go-sdk` v1.4.1.
+
+- **Auth:** prefers `AMPULLA_TOKEN` (Bearer); falls back to `AMPULLA_USER`/`AMPULLA_PASSWORD` (cookie session with retry on 401).
+- **Transport:** stdio (default) or HTTP via `-transport http -http-addr 127.0.0.1:8765`.
+- **Tools:** read (`list_projects`, `list_issues`, `get_issue`, `get_issue_events`, `list_transactions`, `get_transaction_spans`, `get_performance_stats`) + write (`resolve_issue`, `reopen_issue`).
+- **Build/test:** `docker run --rm -v $(pwd)/ampulla-mcp:/app -w /app golang:1.25-alpine go build ./cmd/ampulla-mcp` (note: 1.25, not 1.23).
+- **Safety:** stacktraces capped at 30 frames, breadcrumbs at 20, tags at 50, strings truncated at 1000 bytes; `Authorization`/`Cookie`/`Set-Cookie` headers redacted from request blobs; logs only on stderr.
+- **MCP client cookie jar:** wraps stdlib `cookiejar` to strip the `Secure` flag, otherwise Ampulla session cookies (set with `Secure: true`) are dropped over `http://localhost`. Transport security is enforced at construction time by `client.New`.

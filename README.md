@@ -12,6 +12,8 @@ Built with Go and PostgreSQL. No external dependencies, no queue, no workers —
 - **Retention policy** — automatic cleanup of transactions older than 30 days
 - **ntfy notifications** — per-project push notifications on new issues and regressions
 - **Admin UI** — dark monospace dashboard at `/admin/` for managing organizations, projects, DSN keys, browsing issues with structured stacktraces, and viewing performance stats
+- **API tokens** — Bearer token auth (`ampt_...`) for machine clients, manageable via the admin UI
+- **MCP server** — companion `ampulla-mcp/` exposes issues, events, transactions, and performance stats to AI agents via the Model Context Protocol
 - **Self-monitoring** — Ampulla reports its own errors to itself via Sentry Go SDK
 
 ## Quick Start
@@ -118,7 +120,16 @@ Clicking an issue shows a structured event display with:
 
 ### Admin
 
-All under `/api/admin/`, session-authenticated. CRUD for organizations, projects, DSN keys, issues. Performance stats at `GET /api/admin/performance?project=ID&days=7`.
+All under `/api/admin/`. Authentication accepts either:
+
+- **Session cookie** — `POST /api/admin/login` with admin credentials, returns HMAC-SHA256 signed cookie
+- **API token** — `Authorization: Bearer ampt_...` (created via `#/tokens` admin page or `POST /api/admin/tokens`)
+
+CRUD for organizations, projects, DSN keys, issues, ntfy configurations, and API tokens. Performance stats at `GET /api/admin/performance?project=ID&days=7`. List endpoints support keyset pagination via opaque `cursor` tokens.
+
+### MCP server
+
+`ampulla-mcp/` is a companion Go module that runs as a Model Context Protocol server, letting AI agents read and write Ampulla data without parsing raw JSON. See [`ampulla-mcp/README.md`](ampulla-mcp/README.md) for setup. Tools include `list_projects`, `get_issue`, `get_issue_events`, `list_transactions`, `get_transaction_spans`, `get_performance_stats`, `resolve_issue`, `reopen_issue`. Stdio and HTTP transports are both supported.
 
 ## Development
 
