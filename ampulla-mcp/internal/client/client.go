@@ -87,12 +87,31 @@ func New(baseURL, user, password string) (*Client, error) {
 		baseURL: strings.TrimRight(baseURL, "/"),
 		httpClient: &http.Client{
 			Timeout: 30 * time.Second,
-			Jar:     jar,
+			Jar:     &unsecureJar{jar: jar},
 		},
 		user:      user,
 		password:  password,
 		loginOnce: newSingleflight(),
 	}, nil
+}
+
+// unsecureJar wraps a cookie jar and strips the Secure flag on set.
+// This allows the MCP client to reuse session cookies from Ampulla
+// (which sets Secure: true) even over http://localhost connections.
+// The transport-level security is already enforced by New().
+type unsecureJar struct {
+	jar http.CookieJar
+}
+
+func (j *unsecureJar) SetCookies(u *url.URL, cookies []*http.Cookie) {
+	for _, c := range cookies {
+		c.Secure = false
+	}
+	j.jar.SetCookies(u, cookies)
+}
+
+func (j *unsecureJar) Cookies(u *url.URL) []*http.Cookie {
+	return j.jar.Cookies(u)
 }
 
 // Login authenticates against the Ampulla Admin API.
