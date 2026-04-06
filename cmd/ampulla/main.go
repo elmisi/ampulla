@@ -124,7 +124,7 @@ func main() {
 			r.Post("/login", adminAuth.Login)
 			r.Post("/logout", adminAuth.Logout)
 			r.Group(func(r chi.Router) {
-				r.Use(adminAuth.SessionMiddleware)
+				r.Use(adminAuth.CombinedAuthMiddleware(db))
 				r.Get("/me", adminAuth.Me)
 				r.Get("/dashboard", adminHandler.Dashboard)
 
@@ -154,6 +154,10 @@ func main() {
 				r.Get("/transactions/{id}", adminHandler.GetTransaction)
 				r.Get("/transactions/{id}/spans", adminHandler.ListTransactionSpans)
 				r.Get("/performance", adminHandler.Performance)
+
+				r.Get("/tokens", adminHandler.ListAPITokens)
+				r.Post("/tokens", adminHandler.CreateAPIToken)
+				r.Delete("/tokens/{id}", adminHandler.DeleteAPIToken)
 
 				r.Get("/ntfy-configs", adminHandler.ListNtfyConfigs)
 				r.Post("/ntfy-configs", adminHandler.CreateNtfyConfig)

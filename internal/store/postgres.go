@@ -3,12 +3,14 @@ package store
 import (
 	"context"
 	"embed"
+	"errors"
 	"fmt"
 	"log/slog"
 	"time"
 
 	"strings"
 
+	"github.com/elmisi/ampulla/internal/admin"
 	"github.com/elmisi/ampulla/internal/cursor"
 	"github.com/elmisi/ampulla/internal/event"
 	"github.com/elmisi/ampulla/internal/notify"
@@ -1044,4 +1046,72 @@ func (db *DB) GetProjectByOrgAndSlug(ctx context.Context, orgSlug, projectSlug s
 		return nil, err
 	}
 	return &p, nil
+}
+
+// --- API Tokens ---
+
+// CreateAPIToken inserts a new API token record.
+func (db *DB) CreateAPIToken(ctx context.Context, name, hash, prefix string) (int64, time.Time, error) {
+	var id int64
+	var createdAt time.Time
+	err := db.pool.QueryRow(ctx, `
+		INSERT INTO api_tokens (name, token_hash, prefix)
+		VALUES ($1, $2, $3)
+		RETURNING id, created_at
+	`, name, hash, prefix).Scan(&id, &createdAt)
+	if err != nil {
+		return 0, time.Time{}, fmt.Errorf("create api token: %w", err)
+	}
+	return id, createdAt, nil
+}
+
+// ListAPITokens returns all API tokens (without plaintext).
+func (db *DB) ListAPITokens(ctx context.Context) ([]admin.APITokenRow, error) {
+	rows, err := db.pool.Query(ctx, `
+		SELECT id, name, prefix, created_at, last_used_at
+		FROM api_tokens
+		ORDER BY created_at DESC
+	`)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+
+	var tokens []admin.APITokenRow
+	for rows.Next() {
+		var t admin.APITokenRow
+		if err := rows.Scan(&t.ID, &t.Name, &t.Prefix, &t.CreatedAt, &t.LastUsedAt); err != nil {
+			return nil, err
+		}
+		tokens = append(tokens, t)
+	}
+	return tokens, nil
+}
+
+// DeleteAPIToken removes an API token by ID.
+func (db *DB) DeleteAPIToken(ctx context.Context, id int64) error {
+	_, err := db.pool.Exec(ctx, `DELETE FROM api_tokens WHERE id = $1`, id)
+	return err
+}
+
+// FindAPITokenByHash returns the token row matching the given hash, or nil if not found.
+func (db *DB) FindAPITokenByHash(ctx context.Context, hash string) (*admin.APITokenRow, error) {
+	var t admin.APITokenRow
+	err := db.pool.QueryRow(ctx, `
+		SELECT id, name, prefix, created_at, last_used_at
+		FROM api_tokens WHERE token_hash = $1
+	`, hash).Scan(&t.ID, &t.Name, &t.Prefix, &t.CreatedAt, &t.LastUsedAt)
+	if err != nil {
+		if errors.Is(err, pgx.ErrNoRows) {
+			return nil, nil
+		}
+		return nil, err
+	}
+	return &t, nil
+}
+
+// TouchAPIToken updates last_used_at to now for the given token.
+func (db *DB) TouchAPIToken(ctx context.Context, id int64) error {
+	_, err := db.pool.Exec(ctx, `UPDATE api_tokens SET last_used_at = now() WHERE id = $1`, id)
+	return err
 }

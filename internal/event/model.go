@@ -136,6 +136,17 @@ type SDKAlert struct {
 	LastVersion  string `json:"lastVersion"`
 }
 
+// APIToken represents an API token for Bearer auth.
+// PlaintextToken is only set on creation; otherwise omitted.
+type APIToken struct {
+	ID             int64      `json:"id"`
+	Name           string     `json:"name"`
+	Prefix         string     `json:"prefix"`
+	CreatedAt      time.Time  `json:"createdAt"`
+	LastUsedAt     *time.Time `json:"lastUsedAt,omitempty"`
+	PlaintextToken string     `json:"token,omitempty"`
+}
+
 // Envelope represents a parsed Sentry envelope
 type Envelope struct {
 	Header EnvelopeHeader

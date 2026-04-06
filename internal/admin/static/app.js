@@ -11,6 +11,7 @@ import './pages/issues.js';
 import './pages/transactions.js';
 import './pages/performance.js';
 import './pages/ntfy.js';
+import './pages/tokens.js';
 
 // Cached version info (fetched once at init)
 let versionInfo = null;
@@ -31,6 +32,7 @@ export function render(content, showNav = true) {
       navLink('/transactions', 'Transactions'),
       navLink('/performance', 'Performance'),
       navLink('/ntfy', 'Ntfy'),
+      navLink('/tokens', 'API Tokens'),
       el('a', { href: '#', style: 'margin-top:auto;color:var(--danger)', onClick: async (e) => {
         e.preventDefault(); await api.post('/logout'); router.go('/login');
       }}, 'Logout')

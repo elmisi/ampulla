@@ -9,6 +9,64 @@ import (
 	"testing"
 )
 
+func TestNewWithToken(t *testing.T) {
+	c, err := NewWithToken("http://localhost:8090", "ampt_test")
+	if err != nil {
+		t.Fatalf("NewWithToken: %v", err)
+	}
+	if c.token != "ampt_test" {
+		t.Errorf("token = %q, want ampt_test", c.token)
+	}
+}
+
+func TestNewWithToken_EmptyToken(t *testing.T) {
+	_, err := NewWithToken("http://localhost:8090", "")
+	if err == nil {
+		t.Fatal("expected error for empty token")
+	}
+}
+
+func TestTokenAuth_SendsBearerHeader(t *testing.T) {
+	var gotAuth string
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		gotAuth = r.Header.Get("Authorization")
+		w.Header().Set("Content-Type", "application/json")
+		w.Write([]byte(`{"projects":[]}`))
+	}))
+	defer srv.Close()
+
+	c, err := NewWithToken(srv.URL, "ampt_secret")
+	if err != nil {
+		t.Fatalf("NewWithToken: %v", err)
+	}
+	if _, err := c.GetDashboard(context.Background()); err != nil {
+		t.Fatalf("GetDashboard: %v", err)
+	}
+	if gotAuth != "Bearer ampt_secret" {
+		t.Errorf("Authorization = %q, want %q", gotAuth, "Bearer ampt_secret")
+	}
+}
+
+func TestTokenAuth_NoLoginCalled(t *testing.T) {
+	var loginCalls int
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Path == "/api/admin/login" {
+			loginCalls++
+		}
+		w.Header().Set("Content-Type", "application/json")
+		w.Write([]byte(`{"projects":[]}`))
+	}))
+	defer srv.Close()
+
+	c, _ := NewWithToken(srv.URL, "ampt_secret")
+	c.Login(context.Background()) // should be no-op
+	c.GetDashboard(context.Background())
+
+	if loginCalls != 0 {
+		t.Errorf("login called %d times with token auth, want 0", loginCalls)
+	}
+}
+
 func TestNew_RejectsMalformedURL(t *testing.T) {
 	for _, bad := range []string{"", "ampulla.example.com", "ftp://example.com"} {
 		_, err := New(bad, "u", "p")

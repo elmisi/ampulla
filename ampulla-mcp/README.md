@@ -17,6 +17,21 @@ AMPULLA_PASSWORD=secret \
 
 ## Configuration
 
+The MCP server supports two authentication modes. **Bearer token is preferred**.
+
+### Bearer token (preferred)
+
+Create an API token in the Ampulla admin UI (`#/tokens` page) and set:
+
+| Variable | Required | Description |
+|----------|----------|-------------|
+| `AMPULLA_URL` | yes | Ampulla instance URL (https required, except localhost) |
+| `AMPULLA_TOKEN` | yes | API token (`ampt_...`) |
+
+### Session cookie (legacy)
+
+If `AMPULLA_TOKEN` is not set, the MCP server falls back to admin credentials:
+
 | Variable | Required | Description |
 |----------|----------|-------------|
 | `AMPULLA_URL` | yes | Ampulla instance URL (https required, except localhost) |
@@ -31,9 +46,8 @@ AMPULLA_PASSWORD=secret \
     "ampulla": {
       "command": "/path/to/ampulla-mcp",
       "env": {
-        "AMPULLA_URL": "http://localhost:8090",
-        "AMPULLA_USER": "admin",
-        "AMPULLA_PASSWORD": "secret"
+        "AMPULLA_URL": "https://ampulla.example.com",
+        "AMPULLA_TOKEN": "ampt_..."
       }
     }
   }
@@ -42,6 +56,8 @@ AMPULLA_PASSWORD=secret \
 
 ## Tools
 
+### Read tools
+
 | Tool | Description |
 |------|-------------|
 | `list_projects` | List all projects with issue/transaction counts |
@@ -49,7 +65,15 @@ AMPULLA_PASSWORD=secret \
 | `get_issue` | Get issue details with structured latest event (stacktrace, tags, breadcrumbs) |
 | `get_issue_events` | List events for an issue with structured data |
 | `list_transactions` | List transactions for a project |
+| `get_transaction_spans` | Get all spans for a transaction (capped at 200) |
 | `get_performance_stats` | Aggregate performance stats (p50/p75/p95/p99) |
+
+### Write tools
+
+| Tool | Description |
+|------|-------------|
+| `resolve_issue` | Mark an issue as resolved |
+| `reopen_issue` | Reopen a resolved or ignored issue (set to unresolved) |
 
 ## Safety
 

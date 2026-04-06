@@ -64,6 +64,20 @@ type Transaction struct {
 	ReceivedAt time.Time       `json:"dateReceived"`
 }
 
+// Span mirrors an Ampulla span.
+type Span struct {
+	ID           int64           `json:"id"`
+	TraceID      string          `json:"traceID"`
+	SpanID       string          `json:"spanID"`
+	ParentSpanID string          `json:"parentSpanID,omitempty"`
+	Op           string          `json:"op,omitempty"`
+	Description  string          `json:"description,omitempty"`
+	DurationMs   float64         `json:"duration"`
+	Status       string          `json:"status,omitempty"`
+	Timestamp    time.Time       `json:"startTimestamp"`
+	Data         json.RawMessage `json:"data,omitempty"`
+}
+
 // EndpointStats holds per-endpoint performance metrics.
 type EndpointStats struct {
 	Name  string  `json:"name"`

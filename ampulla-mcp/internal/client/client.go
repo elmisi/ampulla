@@ -5,6 +5,7 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"io"
 	"log/slog"
 	"net/http"
 	"net/http/cookiejar"
@@ -16,12 +17,17 @@ import (
 
 const version = "0.1.0"
 
-// Client talks to the Ampulla Admin API using session cookies.
+// Client talks to the Ampulla Admin API.
+//
+// Two authentication modes:
+//   - Bearer token (preferred): set token via NewWithToken
+//   - Session cookies (legacy): set user/password via New
 type Client struct {
 	baseURL    string
 	httpClient *http.Client
 	user       string
 	password   string
+	token      string // Bearer token; if set, login flow is skipped
 
 	mu        sync.Mutex
 	loginOnce *singleflight
@@ -65,8 +71,34 @@ func (sf *singleflight) Do(fn func() error) error {
 	return err
 }
 
-// New creates a Client. baseURL must use https unless it's localhost.
+// NewWithToken creates a Client that authenticates with a Bearer token.
+// baseURL must use https unless it's localhost.
+func NewWithToken(baseURL, token string) (*Client, error) {
+	c, err := newBase(baseURL)
+	if err != nil {
+		return nil, err
+	}
+	if token == "" {
+		return nil, fmt.Errorf("AMPULLA_TOKEN is empty")
+	}
+	c.token = token
+	return c, nil
+}
+
+// New creates a Client that uses session cookie authentication.
+// baseURL must use https unless it's localhost.
 func New(baseURL, user, password string) (*Client, error) {
+	c, err := newBase(baseURL)
+	if err != nil {
+		return nil, err
+	}
+	c.user = user
+	c.password = password
+	return c, nil
+}
+
+// newBase performs URL validation and constructs the shared parts of a Client.
+func newBase(baseURL string) (*Client, error) {
 	u, err := url.Parse(baseURL)
 	if err != nil {
 		return nil, fmt.Errorf("invalid AMPULLA_URL: %w", err)
@@ -89,8 +121,6 @@ func New(baseURL, user, password string) (*Client, error) {
 			Timeout: 30 * time.Second,
 			Jar:     &unsecureJar{jar: jar},
 		},
-		user:      user,
-		password:  password,
 		loginOnce: newSingleflight(),
 	}, nil
 }
@@ -115,7 +145,11 @@ func (j *unsecureJar) Cookies(u *url.URL) []*http.Cookie {
 }
 
 // Login authenticates against the Ampulla Admin API.
+// No-op when using token authentication.
 func (c *Client) Login(ctx context.Context) error {
+	if c.token != "" {
+		return nil
+	}
 	return c.loginOnce.Do(func() error {
 		return c.doLogin(ctx)
 	})
@@ -146,26 +180,42 @@ func (c *Client) doLogin(ctx context.Context) error {
 
 // doGet performs a GET request with automatic 401 retry.
 func (c *Client) doGet(ctx context.Context, path string) (*http.Response, error) {
-	resp, err := c.rawGet(ctx, path)
+	return c.doRequest(ctx, "GET", path, nil)
+}
+
+// doRequest performs an HTTP request with automatic 401 retry (cookie auth only).
+func (c *Client) doRequest(ctx context.Context, method, path string, body []byte) (*http.Response, error) {
+	resp, err := c.rawRequest(ctx, method, path, body)
 	if err != nil {
 		return nil, err
 	}
-	if resp.StatusCode == http.StatusUnauthorized {
+	if resp.StatusCode == http.StatusUnauthorized && c.token == "" {
+		// Cookie-based auth: try a fresh login and retry once.
 		resp.Body.Close()
 		if err := c.Login(ctx); err != nil {
 			return nil, err
 		}
-		return c.rawGet(ctx, path)
+		return c.rawRequest(ctx, method, path, body)
 	}
 	return resp, nil
 }
 
-func (c *Client) rawGet(ctx context.Context, path string) (*http.Response, error) {
-	req, err := http.NewRequestWithContext(ctx, "GET", c.baseURL+path, nil)
+func (c *Client) rawRequest(ctx context.Context, method, path string, body []byte) (*http.Response, error) {
+	var bodyReader io.Reader
+	if body != nil {
+		bodyReader = strings.NewReader(string(body))
+	}
+	req, err := http.NewRequestWithContext(ctx, method, c.baseURL+path, bodyReader)
 	if err != nil {
 		return nil, err
 	}
 	req.Header.Set("User-Agent", "ampulla-mcp/"+version)
+	if body != nil {
+		req.Header.Set("Content-Type", "application/json")
+	}
+	if c.token != "" {
+		req.Header.Set("Authorization", "Bearer "+c.token)
+	}
 	return c.httpClient.Do(req)
 }
 
@@ -236,6 +286,29 @@ func (c *Client) ListTransactions(ctx context.Context, projectID int64, cursor s
 		return nil, err
 	}
 	return txns, nil
+}
+
+// UpdateIssueStatus changes an issue's status (resolved, unresolved, ignored).
+func (c *Client) UpdateIssueStatus(ctx context.Context, id int64, status string) error {
+	body, _ := json.Marshal(map[string]string{"status": status})
+	resp, err := c.doRequest(ctx, "PUT", fmt.Sprintf("/api/admin/issues/%d", id), body)
+	if err != nil {
+		return err
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode != http.StatusOK {
+		return fmt.Errorf("PUT /api/admin/issues/%d: status %d", id, resp.StatusCode)
+	}
+	return nil
+}
+
+// GetTransactionSpans returns the spans for a transaction.
+func (c *Client) GetTransactionSpans(ctx context.Context, txnID int64) ([]Span, error) {
+	var spans []Span
+	if err := c.getJSON(ctx, fmt.Sprintf("/api/admin/transactions/%d/spans", txnID), &spans); err != nil {
+		return nil, err
+	}
+	return spans, nil
 }
 
 // GetPerformanceStats returns aggregate performance data.

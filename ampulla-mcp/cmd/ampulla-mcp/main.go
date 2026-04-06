@@ -16,18 +16,28 @@ func main() {
 	slog.SetDefault(slog.New(slog.NewTextHandler(os.Stderr, &slog.HandlerOptions{Level: slog.LevelDebug})))
 
 	ampullaURL := requireEnv("AMPULLA_URL")
-	user := requireEnv("AMPULLA_USER")
-	password := requireEnv("AMPULLA_PASSWORD")
 
-	c, err := client.New(ampullaURL, user, password)
-	if err != nil {
-		slog.Error("failed to create client", "error", err)
-		os.Exit(1)
-	}
-
-	if err := c.Login(context.Background()); err != nil {
-		slog.Error("initial login failed", "error", err)
-		os.Exit(1)
+	var c *client.Client
+	var err error
+	if token := os.Getenv("AMPULLA_TOKEN"); token != "" {
+		c, err = client.NewWithToken(ampullaURL, token)
+		if err != nil {
+			slog.Error("failed to create client", "error", err)
+			os.Exit(1)
+		}
+		slog.Debug("using Bearer token authentication")
+	} else {
+		user := requireEnv("AMPULLA_USER")
+		password := requireEnv("AMPULLA_PASSWORD")
+		c, err = client.New(ampullaURL, user, password)
+		if err != nil {
+			slog.Error("failed to create client", "error", err)
+			os.Exit(1)
+		}
+		if err := c.Login(context.Background()); err != nil {
+			slog.Error("initial login failed", "error", err)
+			os.Exit(1)
+		}
 	}
 
 	server := mcp.NewServer(&mcp.Implementation{

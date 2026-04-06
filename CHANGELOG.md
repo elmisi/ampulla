@@ -1,3 +1,15 @@
+## [0.7.0] - 2026-04-06
+
+### Added
+- API token authentication for the admin API: `Authorization: Bearer ampt_...`
+- Migration 010: `api_tokens` table (sha256 hash storage, name + prefix, last_used tracking)
+- Admin endpoints: `GET/POST /api/admin/tokens`, `DELETE /api/admin/tokens/{id}`
+- Admin UI page (`#/tokens`) for creating/listing/revoking tokens
+- `internal/admin/tokens.go`: token generation, hashing, and `CombinedAuthMiddleware` (Bearer or session cookie)
+
+### Changed
+- Admin API routes use `CombinedAuthMiddleware` instead of `SessionMiddleware`, accepting both session cookies and Bearer tokens
+
 ## [0.6.0] - 2026-04-04
 
 ### Added
