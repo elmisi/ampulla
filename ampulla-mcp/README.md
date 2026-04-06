@@ -8,12 +8,24 @@ MCP (Model Context Protocol) server for [Ampulla](https://github.com/elmisi/ampu
 # Build
 docker run --rm -v $(pwd)/ampulla-mcp:/app -w /app golang:1.25-alpine go build ./cmd/ampulla-mcp
 
-# Run
-AMPULLA_URL=http://localhost:8090 \
-AMPULLA_USER=admin \
-AMPULLA_PASSWORD=secret \
+# Run as stdio (default)
+AMPULLA_URL=https://ampulla.example.com \
+AMPULLA_TOKEN=ampt_... \
 ./ampulla-mcp
+
+# Run as HTTP server
+AMPULLA_URL=https://ampulla.example.com \
+AMPULLA_TOKEN=ampt_... \
+./ampulla-mcp -transport http -http-addr 127.0.0.1:8765
 ```
+
+## Transport modes
+
+| Flag | Description |
+|------|-------------|
+| `-transport stdio` (default) | JSON-RPC over stdin/stdout (for `.mcp.json` integration) |
+| `-transport http` | Streamable HTTP transport for remote clients |
+| `-http-addr` | Listen address for HTTP transport (default `127.0.0.1:8765`) |
 
 ## Configuration
 
