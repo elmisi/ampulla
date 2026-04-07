@@ -63,12 +63,28 @@ func extractBearer(r *http.Request) string {
 	return strings.TrimPrefix(h, "Bearer ")
 }
 
+// tokenContextKey is the context key for the authenticated APITokenRow.
+type tokenContextKey struct{}
+
+// TokenFromContext returns the APITokenRow associated with the request, or nil
+// when the request was authenticated via session cookie or no auth.
+func TokenFromContext(ctx context.Context) *APITokenRow {
+	v := ctx.Value(tokenContextKey{})
+	if v == nil {
+		return nil
+	}
+	return v.(*APITokenRow)
+}
+
 // CombinedAuthMiddleware accepts either a Bearer token or a session cookie.
 //
 // Logic:
 //   - Authorization: Bearer <token> present → validate token, no cookie check
 //   - No Authorization header → validate session cookie
 //   - Invalid Bearer token → 401 (does not fall back to cookie)
+//
+// On successful Bearer auth, the APITokenRow is stored in the request context
+// (retrievable via TokenFromContext).
 func (a *Auth) CombinedAuthMiddleware(store TokenStore) func(http.Handler) http.Handler {
 	sessionMW := a.SessionMiddleware
 	return func(next http.Handler) http.Handler {
@@ -95,7 +111,8 @@ func (a *Auth) CombinedAuthMiddleware(store TokenStore) func(http.Handler) http.
 				_ = store.TouchAPIToken(ctx, row.ID)
 			}()
 
-			next.ServeHTTP(w, r)
+			ctx := context.WithValue(r.Context(), tokenContextKey{}, row)
+			next.ServeHTTP(w, r.WithContext(ctx))
 		})
 	}
 }

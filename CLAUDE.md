@@ -147,9 +147,30 @@ Endpoints (require existing auth):
 
 Sibling project at `ampulla-mcp/` (separate Go module, `go 1.25`). MCP (Model Context Protocol) server that exposes Ampulla data to AI agents via the SDK `github.com/modelcontextprotocol/go-sdk` v1.4.1.
 
-- **Auth:** prefers `AMPULLA_TOKEN` (Bearer); falls back to `AMPULLA_USER`/`AMPULLA_PASSWORD` (cookie session with retry on 401).
-- **Transport:** stdio (default) or HTTP via `-transport http -http-addr 127.0.0.1:8765`.
 - **Tools:** read (`list_projects`, `list_issues`, `get_issue`, `get_issue_events`, `list_transactions`, `get_transaction_spans`, `get_performance_stats`) + write (`resolve_issue`, `reopen_issue`).
 - **Build/test:** `docker run --rm -v $(pwd)/ampulla-mcp:/app -w /app golang:1.25-alpine go build ./cmd/ampulla-mcp` (note: 1.25, not 1.23).
 - **Safety:** stacktraces capped at 30 frames, breadcrumbs at 20, tags at 50, strings truncated at 1000 bytes; `Authorization`/`Cookie`/`Set-Cookie` headers redacted from request blobs; logs only on stderr.
-- **MCP client cookie jar:** wraps stdlib `cookiejar` to strip the `Secure` flag, otherwise Ampulla session cookies (set with `Secure: true`) are dropped over `http://localhost`. Transport security is enforced at construction time by `client.New`.
+
+### Transports and authentication
+
+Two transport modes with different auth models:
+
+1. **stdio** (default, local development): single client constructed at startup using `AMPULLA_TOKEN` (preferred) or `AMPULLA_USER`/`AMPULLA_PASSWORD` (cookie session, retries on 401). The same token serves every request. Used as a child process via `.mcp.json` `command`.
+
+2. **http** (hosted production, `-transport http`): per-request Bearer pass-through. Each incoming HTTP request must carry `Authorization: Bearer ampt_...`. The MCP server validates the token by calling Ampulla `GET /api/admin/tokens/whoami` (via `auth.RequireBearerToken` middleware from the SDK), then constructs a per-session client using that token. The MCP server has no credentials of its own. Session-binding via `auth.TokenInfo.UserID = "token:<id>"` prevents token swap mid-session (SDK rejects with 403). Token revocation in Ampulla takes effect on the very next request because every request triggers re-validation. The verified token is stashed in `auth.TokenInfo.Extra[tokenExtraKey]` and recovered by `getServer` — **never** reparsed from the Authorization header, to avoid drift with the SDK middleware's RFC 6750 parsing rules.
+
+### HTTP error classification (important)
+
+Only a genuine Ampulla 401 response to the whoami probe is mapped to `auth.ErrInvalidToken` (→ SDK returns 401 to the client). Everything else — network failures, 5xx responses, JSON decode errors — propagates as a generic server error (→ SDK returns 500). This distinction prevents transient backend outages from being misreported to MCP clients as credential revocations. The contract is enforced by `client.ErrUnauthorized` (only wrapped on 401) and tested in `http_test.go` (`TestVerifier_Preserves5xxAsServerError`, `TestHandlerChain_UpstreamOutageReturns500`).
+
+Two cmd files: `cmd/ampulla-mcp/main.go` (entrypoint, stdio mode) and `cmd/ampulla-mcp/http.go` (HTTP mode + verifier + factory).
+
+### Production deployment
+
+Both `ampulla` and `ampulla-mcp` ship in the same `docker-compose.yml`. Traefik routes `Host(ampulla.elmisi.com) && PathPrefix(/mcp)` to the MCP container with priority 200, applying a `stripprefix` middleware to remove `/mcp` before forwarding. The MCP container reaches Ampulla via the internal Docker network using `http://ampulla:8090` and the `AMPULLA_INSECURE_HTTP=1` escape hatch (TLS terminates at Traefik on the public side).
+
+The MCP container needs **no secrets at all** in production: it has no token, no admin credentials. Each MCP client carries its own Bearer token.
+
+### MCP client cookie jar quirk
+
+Wraps stdlib `cookiejar` to strip the `Secure` flag, otherwise Ampulla session cookies (set with `Secure: true`) are dropped over `http://localhost`. Transport security is enforced at construction time by `client.New`. Only relevant for cookie-mode (legacy stdio); token-mode bypasses cookies entirely.

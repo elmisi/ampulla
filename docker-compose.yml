@@ -18,6 +18,31 @@ services:
       - web_proxy_net
       - ampulla_internal
 
+  ampulla-mcp:
+    build: ./ampulla-mcp
+    container_name: ampulla-mcp
+    restart: always
+    depends_on:
+      - ampulla
+    environment:
+      AMPULLA_URL: http://ampulla:8090
+      AMPULLA_INSECURE_HTTP: "1"
+    command: ["-transport", "http", "-http-addr", "0.0.0.0:8765"]
+    labels:
+      - "traefik.enable=true"
+      # Higher priority than the bare-host ampulla router so /mcp/ traffic
+      # is matched here first.
+      - "traefik.http.routers.ampulla-mcp.rule=Host(`ampulla.elmisi.com`) && PathPrefix(`/mcp`)"
+      - "traefik.http.routers.ampulla-mcp.priority=200"
+      - "traefik.http.routers.ampulla-mcp.entrypoints=websecure"
+      - "traefik.http.routers.ampulla-mcp.tls.certresolver=letsencrypt"
+      - "traefik.http.routers.ampulla-mcp.middlewares=ampulla-mcp-stripprefix,security-headers@file"
+      - "traefik.http.middlewares.ampulla-mcp-stripprefix.stripprefix.prefixes=/mcp"
+      - "traefik.http.services.ampulla-mcp.loadbalancer.server.port=8765"
+    networks:
+      - web_proxy_net
+      - ampulla_internal
+
   ampulla-db:
     image: postgres:16-alpine
     container_name: ampulla-db

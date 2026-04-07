@@ -157,6 +157,7 @@ func main() {
 
 				r.Get("/tokens", adminHandler.ListAPITokens)
 				r.Post("/tokens", adminHandler.CreateAPIToken)
+				r.Get("/tokens/whoami", adminHandler.WhoAmIToken)
 				r.Delete("/tokens/{id}", adminHandler.DeleteAPIToken)
 
 				r.Get("/ntfy-configs", adminHandler.ListNtfyConfigs)

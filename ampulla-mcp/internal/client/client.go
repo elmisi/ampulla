@@ -4,18 +4,27 @@ package client
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
 	"log/slog"
 	"net/http"
 	"net/http/cookiejar"
 	"net/url"
+	"os"
 	"strings"
 	"sync"
 	"time"
 )
 
 const version = "0.1.0"
+
+// ErrUnauthorized is returned by getJSON and related methods when the upstream
+// Ampulla endpoint responds with 401. Callers (e.g. the MCP HTTP verifier)
+// should distinguish this from transport or 5xx errors: only 401 means the
+// token was rejected; anything else is a backend outage and must not be
+// reported to MCP clients as an auth failure.
+var ErrUnauthorized = errors.New("unauthorized")
 
 // Client talks to the Ampulla Admin API.
 //
@@ -98,6 +107,11 @@ func New(baseURL, user, password string) (*Client, error) {
 }
 
 // newBase performs URL validation and constructs the shared parts of a Client.
+//
+// http:// is rejected for non-localhost hosts unless AMPULLA_INSECURE_HTTP=1
+// is set in the environment. The escape hatch exists for trusted internal
+// networks (e.g. service-to-service inside Docker compose) where TLS is
+// terminated at an upstream proxy.
 func newBase(baseURL string) (*Client, error) {
 	u, err := url.Parse(baseURL)
 	if err != nil {
@@ -111,7 +125,9 @@ func newBase(baseURL string) (*Client, error) {
 	}
 	host := u.Hostname()
 	if u.Scheme == "http" && host != "localhost" && host != "127.0.0.1" && host != "::1" {
-		return nil, fmt.Errorf("AMPULLA_URL must use https (http allowed only for localhost)")
+		if os.Getenv("AMPULLA_INSECURE_HTTP") == "" {
+			return nil, fmt.Errorf("AMPULLA_URL must use https (http allowed only for localhost; set AMPULLA_INSECURE_HTTP=1 to override for trusted internal networks)")
+		}
 	}
 
 	jar, _ := cookiejar.New(nil)
@@ -225,6 +241,9 @@ func (c *Client) getJSON(ctx context.Context, path string, out any) error {
 		return err
 	}
 	defer resp.Body.Close()
+	if resp.StatusCode == http.StatusUnauthorized {
+		return fmt.Errorf("GET %s: %w", path, ErrUnauthorized)
+	}
 	if resp.StatusCode != http.StatusOK {
 		return fmt.Errorf("GET %s: status %d", path, resp.StatusCode)
 	}
@@ -286,6 +305,16 @@ func (c *Client) ListTransactions(ctx context.Context, projectID int64, cursor s
 		return nil, err
 	}
 	return txns, nil
+}
+
+// WhoAmIToken returns metadata for the API token used by this client.
+// Only meaningful when the client was constructed with NewWithToken.
+func (c *Client) WhoAmIToken(ctx context.Context) (*WhoAmIResponse, error) {
+	var resp WhoAmIResponse
+	if err := c.getJSON(ctx, "/api/admin/tokens/whoami", &resp); err != nil {
+		return nil, err
+	}
+	return &resp, nil
 }
 
 // UpdateIssueStatus changes an issue's status (resolved, unresolved, ignored).

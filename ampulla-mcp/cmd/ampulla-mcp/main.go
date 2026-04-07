@@ -5,7 +5,6 @@ import (
 	"flag"
 	"fmt"
 	"log/slog"
-	"net/http"
 	"os"
 
 	"github.com/modelcontextprotocol/go-sdk/mcp"
@@ -23,6 +22,26 @@ func main() {
 
 	ampullaURL := requireEnv("AMPULLA_URL")
 
+	switch *transport {
+	case "stdio":
+		runStdio(ampullaURL)
+	case "http":
+		// HTTP mode does not use AMPULLA_TOKEN/USER/PASSWORD: each request must
+		// carry its own Bearer token, which the MCP server validates against
+		// Ampulla and forwards on the caller's behalf.
+		if err := httpTransport(*httpAddr, ampullaURL); err != nil {
+			slog.Error("server error", "error", err)
+			os.Exit(1)
+		}
+	default:
+		fmt.Fprintf(os.Stderr, "invalid transport: %q (must be stdio or http)\n", *transport)
+		os.Exit(2)
+	}
+}
+
+// runStdio constructs a single shared client (using AMPULLA_TOKEN or
+// AMPULLA_USER/AMPULLA_PASSWORD) and runs the MCP server on stdin/stdout.
+func runStdio(ampullaURL string) {
 	var c *client.Client
 	var err error
 	if token := os.Getenv("AMPULLA_TOKEN"); token != "" {
@@ -46,34 +65,15 @@ func main() {
 		}
 	}
 
-	makeServer := func() *mcp.Server {
-		s := mcp.NewServer(&mcp.Implementation{
-			Name:    "ampulla-mcp",
-			Version: "0.1.0",
-		}, nil)
-		tools.Register(s, c)
-		return s
-	}
+	server := mcp.NewServer(&mcp.Implementation{
+		Name:    "ampulla-mcp",
+		Version: "0.1.0",
+	}, nil)
+	tools.Register(server, c)
 
-	switch *transport {
-	case "stdio":
-		if err := makeServer().Run(context.Background(), &mcp.StdioTransport{}); err != nil {
-			slog.Error("server error", "error", err)
-			os.Exit(1)
-		}
-	case "http":
-		handler := mcp.NewStreamableHTTPHandler(func(req *http.Request) *mcp.Server {
-			return makeServer()
-		}, nil)
-		slog.Info("MCP HTTP server listening", "addr", *httpAddr)
-		srv := &http.Server{Addr: *httpAddr, Handler: handler}
-		if err := srv.ListenAndServe(); err != nil && err != http.ErrServerClosed {
-			slog.Error("server error", "error", err)
-			os.Exit(1)
-		}
-	default:
-		fmt.Fprintf(os.Stderr, "invalid transport: %q (must be stdio or http)\n", *transport)
-		os.Exit(2)
+	if err := server.Run(context.Background(), &mcp.StdioTransport{}); err != nil {
+		slog.Error("server error", "error", err)
+		os.Exit(1)
 	}
 }
 

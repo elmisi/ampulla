@@ -1,3 +1,18 @@
+## [0.8.0] - 2026-04-07
+
+### Added
+- `GET /api/admin/tokens/whoami` endpoint: returns metadata for the API token authenticating the current request (used by ampulla-mcp HTTP transport for token validation)
+- `admin.TokenFromContext()` helper to retrieve the validated APITokenRow from request context
+- ampulla-mcp container shipped in the same docker-compose.yml as Ampulla
+- Traefik routing for `https://<domain>/mcp/` → ampulla-mcp container with stripprefix middleware
+
+### Changed
+- `CombinedAuthMiddleware` now stores the APITokenRow in the request context on successful Bearer auth (transparent: cookie auth path is unchanged)
+- ampulla-mcp HTTP transport now uses Bearer pass-through: each MCP client carries its own API token, the MCP server has no service credentials and no shared MCP_AUTH_TOKEN. Validation happens on every request (revocation is instant), session-binding via SDK `auth.TokenInfo.UserID` prevents token swap mid-session.
+- ampulla-mcp client gained `AMPULLA_INSECURE_HTTP=1` opt-in escape hatch for trusted internal Docker networks where TLS terminates at an upstream proxy
+- ampulla-mcp client `getJSON`: new exported `client.ErrUnauthorized` sentinel, wrapped only on Ampulla 401 responses. Other errors (5xx, network, decode) are preserved as-is so callers can distinguish token revocation from backend outage.
+- ampulla-mcp HTTP verifier: the verified token is stashed in `auth.TokenInfo.Extra` and recovered by `getServer` from the request context, eliminating the risk of drift between the SDK middleware's RFC 6750 header parsing and the session-creation path. Only genuine 401s from Ampulla are mapped to `auth.ErrInvalidToken`; transient backend failures surface as 500 to MCP clients instead of masquerading as credential revocations.
+
 ## [0.7.0] - 2026-04-06
 
 ### Added

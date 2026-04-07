@@ -90,6 +90,17 @@ type EndpointStats struct {
 	P99   float64 `json:"p99"`
 }
 
+// WhoAmIResponse is returned by GET /api/admin/tokens/whoami when the request
+// is authenticated via Bearer token. Used by the MCP HTTP server to validate
+// incoming tokens before opening a session.
+type WhoAmIResponse struct {
+	ID         int64      `json:"id"`
+	Name       string     `json:"name"`
+	Prefix     string     `json:"prefix"`
+	CreatedAt  time.Time  `json:"createdAt"`
+	LastUsedAt *time.Time `json:"lastUsedAt,omitempty"`
+}
+
 // PerformanceStats holds aggregate performance data.
 type PerformanceStats struct {
 	Endpoints       []EndpointStats `json:"endpoints"`

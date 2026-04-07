@@ -3,6 +3,7 @@ package client
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"net/http"
 	"net/http/httptest"
 	"sync/atomic"
@@ -47,6 +48,39 @@ func TestTokenAuth_SendsBearerHeader(t *testing.T) {
 	}
 }
 
+func TestTokenAuth_401ReturnsErrUnauthorized(t *testing.T) {
+	// Ampulla responds 401 to the whoami probe.
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.WriteHeader(http.StatusUnauthorized)
+	}))
+	defer srv.Close()
+
+	c, _ := NewWithToken(srv.URL, "ampt_bad")
+	_, err := c.WhoAmIToken(context.Background())
+	if err == nil {
+		t.Fatal("expected error")
+	}
+	if !errors.Is(err, ErrUnauthorized) {
+		t.Errorf("401 must wrap ErrUnauthorized, got %v", err)
+	}
+}
+
+func TestTokenAuth_5xxDoesNotWrapErrUnauthorized(t *testing.T) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.WriteHeader(http.StatusInternalServerError)
+	}))
+	defer srv.Close()
+
+	c, _ := NewWithToken(srv.URL, "ampt_ok")
+	_, err := c.WhoAmIToken(context.Background())
+	if err == nil {
+		t.Fatal("expected error")
+	}
+	if errors.Is(err, ErrUnauthorized) {
+		t.Errorf("5xx must NOT wrap ErrUnauthorized, got %v", err)
+	}
+}
+
 func TestTokenAuth_NoLoginCalled(t *testing.T) {
 	var loginCalls int
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
@@ -77,9 +111,18 @@ func TestNew_RejectsMalformedURL(t *testing.T) {
 }
 
 func TestNew_RejectsPlainHTTP(t *testing.T) {
+	t.Setenv("AMPULLA_INSECURE_HTTP", "")
 	_, err := New("http://example.com", "u", "p")
 	if err == nil {
 		t.Fatal("expected error for http:// non-localhost URL")
+	}
+}
+
+func TestNew_AllowsHTTPWithInsecureFlag(t *testing.T) {
+	t.Setenv("AMPULLA_INSECURE_HTTP", "1")
+	_, err := New("http://ampulla:8090", "u", "p")
+	if err != nil {
+		t.Fatalf("with AMPULLA_INSECURE_HTTP set, expected success, got: %v", err)
 	}
 }
 

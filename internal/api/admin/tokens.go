@@ -68,6 +68,27 @@ func (h *Handler) ListAPITokens(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, http.StatusOK, tokens)
 }
 
+// WhoAmIToken returns metadata for the API token used to authenticate the
+// current request. Returns 401 if the request was authenticated via session
+// cookie instead of a Bearer token.
+//
+// This endpoint exists primarily for the ampulla-mcp HTTP transport, which
+// uses it as a lightweight per-request token validation probe.
+func (h *Handler) WhoAmIToken(w http.ResponseWriter, r *http.Request) {
+	row := admin.TokenFromContext(r.Context())
+	if row == nil {
+		http.Error(w, `{"error":"not authenticated via API token"}`, http.StatusUnauthorized)
+		return
+	}
+	writeJSON(w, http.StatusOK, event.APIToken{
+		ID:         row.ID,
+		Name:       row.Name,
+		Prefix:     row.Prefix,
+		CreatedAt:  row.CreatedAt,
+		LastUsedAt: row.LastUsedAt,
+	})
+}
+
 // DeleteAPIToken removes an API token by ID.
 func (h *Handler) DeleteAPIToken(w http.ResponseWriter, r *http.Request) {
 	id, err := paramInt64(r, "id")

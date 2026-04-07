@@ -129,7 +129,11 @@ CRUD for organizations, projects, DSN keys, issues, ntfy configurations, and API
 
 ### MCP server
 
-`ampulla-mcp/` is a companion Go module that runs as a Model Context Protocol server, letting AI agents read and write Ampulla data without parsing raw JSON. See [`ampulla-mcp/README.md`](ampulla-mcp/README.md) for setup. Tools include `list_projects`, `get_issue`, `get_issue_events`, `list_transactions`, `get_transaction_spans`, `get_performance_stats`, `resolve_issue`, `reopen_issue`. Stdio and HTTP transports are both supported.
+`ampulla-mcp/` is a companion Go module that runs as a Model Context Protocol server, letting AI agents read and write Ampulla data without parsing raw JSON. Tools include `list_projects`, `get_issue`, `get_issue_events`, `list_transactions`, `get_transaction_spans`, `get_performance_stats`, `resolve_issue`, `reopen_issue`.
+
+When deployed alongside Ampulla via the bundled compose, the MCP server is reachable at `https://<your-domain>/mcp/`. Each MCP client uses its own API token from `/admin/#/tokens` — the MCP server validates and forwards on the caller's behalf, with no shared credentials of its own. Token revocation takes effect on the next request.
+
+See [`ampulla-mcp/README.md`](ampulla-mcp/README.md) for setup, transports (stdio + HTTP), and `.mcp.json` examples.
 
 ## Development
 
