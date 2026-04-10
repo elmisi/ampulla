@@ -1,3 +1,8 @@
+## [0.8.1] - 2026-04-10
+
+### Fixed
+- Add CORS headers for browser SDK ingest: Traefik middleware allows cross-origin `POST` from any origin, unblocking Sentry Browser SDKs on external domains (e.g. powder.elmisi.com)
+
 ## [0.8.0] - 2026-04-07
 
 ### Added

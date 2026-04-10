@@ -12,7 +12,13 @@ services:
       - "traefik.http.routers.ampulla.rule=Host(`ampulla.elmisi.com`)"
       - "traefik.http.routers.ampulla.entrypoints=websecure"
       - "traefik.http.routers.ampulla.tls.certresolver=letsencrypt"
-      - "traefik.http.routers.ampulla.middlewares=security-headers@file,gzip@file"
+      - "traefik.http.routers.ampulla.middlewares=ampulla-cors,security-headers@file,gzip@file"
+      # CORS: allow browser SDKs on any origin to POST events to ingest endpoints.
+      # Safe on all paths: without Access-Control-Allow-Credentials the browser
+      # will never send session cookies cross-origin, so admin/web APIs stay protected.
+      - "traefik.http.middlewares.ampulla-cors.headers.accessControlAllowOriginList=*"
+      - "traefik.http.middlewares.ampulla-cors.headers.accessControlAllowMethods=POST,OPTIONS"
+      - "traefik.http.middlewares.ampulla-cors.headers.accessControlAllowHeaders=Content-Type,X-Sentry-Auth"
       - "traefik.http.services.ampulla.loadbalancer.server.port=8090"
     networks:
       - web_proxy_net
